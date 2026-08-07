@@ -1,0 +1,17 @@
+{
+  "name": "sap-ai-flow",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "npm --workspace @sap-ai-flow/web run dev",
+    "build": "npm --workspace @sap-ai-flow/web run build",
+    "test": "npm --workspace @sap-ai-flow/web run test",
+    "typecheck": "npm --workspace @sap-ai-flow/web run typecheck"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
