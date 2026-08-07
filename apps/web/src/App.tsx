@@ -32,7 +32,7 @@ import { ApiError, modifyFlowchart } from './api/client'
 import { Inspector } from './components/Inspector'
 import { createEmptyGraph, createId } from './data'
 import { BusinessNode, BusinessNodeData, BusinessNodeModel } from './flow/BusinessNode'
-import { layoutGraph, NODE_HEIGHT, NODE_WIDTH } from './flow/layout'
+import { layoutGraph, nodeDimensions } from './flow/layout'
 import { useFlowStore } from './stores/flowStore'
 import type { GraphDocument } from './types'
 
@@ -73,7 +73,8 @@ function FlowWorkspace() {
       graph.nodes.map((node) => ({
         id: node.id,
         type: 'business',
-        position: graph.layout[node.id] ?? { x: 0, y: 0 },
+        position: { ...(graph.layout[node.id] ?? { x: 0, y: 0 }) },
+        style: nodeDimensions(node.type),
         data: {
           label: node.label,
           description: node.description,

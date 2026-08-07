@@ -56,7 +56,14 @@ export const useFlowStore = create<FlowState>()(
     }),
     {
       name: 'sap-ai-flow-state',
+      version: 2,
       partialize: (state) => ({ graph: state.graph }),
+      migrate: (persistedState) => {
+        const state = persistedState as { graph?: GraphDocument }
+        return {
+          graph: state.graph ? layoutGraph(state.graph) : initialGraph,
+        }
+      },
     },
   ),
 )

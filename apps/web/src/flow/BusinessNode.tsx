@@ -1,12 +1,5 @@
 import type { Node, NodeProps } from '@xyflow/react'
 import { Handle, Position } from '@xyflow/react'
-import {
-  CirclePlay,
-  CircleStop,
-  ClipboardCheck,
-  GitBranch,
-  Layers3,
-} from 'lucide-react'
 import type { Direction, NodeType } from '../types'
 
 export interface BusinessNodeData extends Record<string, unknown> {
@@ -18,37 +11,30 @@ export interface BusinessNodeData extends Record<string, unknown> {
 
 export type BusinessNodeModel = Node<BusinessNodeData, 'business'>
 
-const iconByType = {
-  start: CirclePlay,
-  end: CircleStop,
-  task: ClipboardCheck,
-  decision: GitBranch,
-  subprocess: Layers3,
-}
-
 export function BusinessNode({ data, selected }: NodeProps<BusinessNodeModel>) {
-  const Icon = iconByType[data.nodeType]
   const horizontal = data.direction === 'LR'
+  const acceptsIncoming = data.nodeType !== 'start'
+  const allowsOutgoing = data.nodeType !== 'end'
 
   return (
     <div className={`business-node business-node--${data.nodeType}${selected ? ' is-selected' : ''}`}>
-      <Handle
-        type="target"
-        position={horizontal ? Position.Left : Position.Top}
-        className="business-node__handle"
-      />
-      <span className="business-node__icon" aria-hidden="true">
-        <Icon size={18} strokeWidth={2} />
-      </span>
+      {acceptsIncoming && (
+        <Handle
+          type="target"
+          position={horizontal ? Position.Left : Position.Top}
+          className="business-node__handle"
+        />
+      )}
       <span className="business-node__text">
         <strong>{data.label}</strong>
-        <small>{nodeTypeLabel[data.nodeType]}</small>
       </span>
-      <Handle
-        type="source"
-        position={horizontal ? Position.Right : Position.Bottom}
-        className="business-node__handle"
-      />
+      {allowsOutgoing && (
+        <Handle
+          type="source"
+          position={horizontal ? Position.Right : Position.Bottom}
+          className="business-node__handle"
+        />
+      )}
     </div>
   )
 }

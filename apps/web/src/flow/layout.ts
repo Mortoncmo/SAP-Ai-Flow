@@ -1,8 +1,22 @@
 import dagre from '@dagrejs/dagre'
-import type { GraphDocument } from '../types'
+import type { GraphDocument, NodeType } from '../types'
 
-export const NODE_WIDTH = 192
-export const NODE_HEIGHT = 72
+export interface NodeDimensions {
+  width: number
+  height: number
+}
+
+const NODE_DIMENSIONS: Record<NodeType, NodeDimensions> = {
+  start: { width: 164, height: 58 },
+  end: { width: 164, height: 58 },
+  task: { width: 190, height: 70 },
+  decision: { width: 176, height: 112 },
+  subprocess: { width: 190, height: 76 },
+}
+
+export function nodeDimensions(type: NodeType): NodeDimensions {
+  return { ...NODE_DIMENSIONS[type] }
+}
 
 export function layoutGraph(graph: GraphDocument): GraphDocument {
   if (graph.nodes.length === 0) return { ...graph, layout: {} }
@@ -19,7 +33,7 @@ export function layoutGraph(graph: GraphDocument): GraphDocument {
   })
 
   graph.nodes.forEach((node) => {
-    layout.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT })
+    layout.setNode(node.id, nodeDimensions(node.type))
   })
   graph.edges.forEach((edge) => layout.setEdge(edge.source, edge.target))
   dagre.layout(layout)
@@ -27,11 +41,12 @@ export function layoutGraph(graph: GraphDocument): GraphDocument {
   const nextLayout = Object.fromEntries(
     graph.nodes.map((node) => {
       const position = layout.node(node.id) as { x: number; y: number }
+      const dimensions = nodeDimensions(node.type)
       return [
         node.id,
         {
-          x: position.x - NODE_WIDTH / 2,
-          y: position.y - NODE_HEIGHT / 2,
+          x: position.x - dimensions.width / 2,
+          y: position.y - dimensions.height / 2,
         },
       ]
     }),
