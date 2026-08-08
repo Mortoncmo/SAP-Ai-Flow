@@ -14,9 +14,10 @@ import {
   useReactFlow,
   getViewportForBounds,
 } from '@xyflow/react'
-import { toPng } from 'html-to-image'
+import { toPng, toSvg } from 'html-to-image'
 import {
   Bot,
+  FileCode2,
   FileJson,
   FilePlus2,
   ImageDown,
@@ -31,6 +32,7 @@ import {
 import { ApiError, modifyFlowchart } from './api/client'
 import { Inspector } from './components/Inspector'
 import { createEmptyGraph, createId } from './data'
+import { buildExportFilename, downloadBlob, downloadUrl } from './export'
 import { BusinessNode, BusinessNodeData, BusinessNodeModel } from './flow/BusinessNode'
 import { layoutGraph, nodeDimensions } from './flow/layout'
 import { useFlowStore } from './stores/flowStore'
@@ -181,35 +183,46 @@ function FlowWorkspace() {
   const exportJson = () => {
     downloadBlob(
       new Blob([JSON.stringify(graph, null, 2)], { type: 'application/json;charset=utf-8' }),
-      `${safeName(graph.title)}.json`,
+      buildExportFilename(graph.title, 'json'),
     )
     setMessage('JSON 已导出')
+  }
+
+  const exportSvg = async () => {
+    const viewport = document.querySelector('.react-flow__viewport') as HTMLElement | null
+    if (!viewport || getNodes().length === 0) return
+    setMessage('正在生成 SVG')
+    setError('')
+    try {
+      const { width, height, style } = getExportViewport(getNodesBounds(getNodes()))
+      const dataUrl = await toSvg(viewport, {
+        backgroundColor: '#f7f7f4',
+        width,
+        height,
+        style,
+      })
+      downloadUrl(dataUrl, buildExportFilename(graph.title, 'svg'))
+      setMessage('SVG 已导出')
+    } catch {
+      setError('SVG 导出失败，请重试。')
+    }
   }
 
   const exportPng = async () => {
     const viewport = document.querySelector('.react-flow__viewport') as HTMLElement | null
     if (!viewport || getNodes().length === 0) return
     setMessage('正在生成 PNG')
+    setError('')
     try {
-      const bounds = getNodesBounds(getNodes())
-      const width = Math.max(1200, Math.ceil(bounds.width + 160))
-      const height = Math.max(760, Math.ceil(bounds.height + 160))
-      const transform = getViewportForBounds(bounds, width, height, 0.5, 2, 0.12)
+      const { width, height, style } = getExportViewport(getNodesBounds(getNodes()))
       const dataUrl = await toPng(viewport, {
         backgroundColor: '#f7f7f4',
         width,
         height,
-        style: {
-          width: `${width}px`,
-          height: `${height}px`,
-          transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.zoom})`,
-        },
+        style,
         pixelRatio: 2,
       })
-      const anchor = document.createElement('a')
-      anchor.href = dataUrl
-      anchor.download = `${safeName(graph.title)}.png`
-      anchor.click()
+      downloadUrl(dataUrl, buildExportFilename(graph.title, 'png'))
       setMessage('PNG 已导出')
     } catch {
       setError('PNG 导出失败，请重试。')
@@ -265,6 +278,9 @@ function FlowWorkspace() {
           <input ref={importRef} type="file" accept="application/json,.json" hidden onChange={handleImport} />
           <button className="icon-button" title="导出 JSON" aria-label="导出 JSON" onClick={exportJson}>
             <FileJson size={18} />
+          </button>
+          <button className="icon-button" title="导出 SVG" aria-label="导出 SVG" onClick={exportSvg}>
+            <FileCode2 size={18} />
           </button>
           <button className="icon-button" title="导出 PNG" aria-label="导出 PNG" onClick={exportPng}>
             <ImageDown size={18} />
@@ -424,17 +440,20 @@ export default function App() {
   )
 }
 
-function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = filename
-  anchor.click()
-  URL.revokeObjectURL(url)
-}
+function getExportViewport(bounds: { x: number; y: number; width: number; height: number }) {
+  const width = Math.max(1200, Math.ceil(bounds.width + 160))
+  const height = Math.max(760, Math.ceil(bounds.height + 160))
+  const transform = getViewportForBounds(bounds, width, height, 0.5, 2, 0.12)
 
-function safeName(name: string): string {
-  return name.replace(/[\\/:*?"<>|]/g, '-').trim() || 'flowchart'
+  return {
+    width,
+    height,
+    style: {
+      width: `${width}px`,
+      height: `${height}px`,
+      transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.zoom})`,
+    },
+  }
 }
 
 function nodeColor(type: string): string {

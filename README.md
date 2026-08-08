@@ -13,7 +13,7 @@ SAP AI Flow 是一个面向 SAP 业务流程建模的对话式流程图工具。
 - Patch 深拷贝原子执行，失败时不改变当前图。
 - 画布拖动、连线、删除、节点属性编辑。
 - 撤销、重做和浏览器本地恢复。
-- JSON 导入导出和全图 PNG 导出。
+- JSON 导入导出和全图 PNG、SVG 导出。
 - 本地规则 Provider 和 DeepSeek Provider。
 - FastAPI OpenAPI 文档、pytest 和 Vitest 测试。
 - Docker Compose 和 GitHub Actions 基线。
