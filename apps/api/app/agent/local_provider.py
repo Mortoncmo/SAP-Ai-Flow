@@ -19,39 +19,11 @@ class LocalRuleProvider:
         return ProviderResult(patch=patch, provider="local", model="rule-engine-v1")
 
     def _build_patch(self, graph: GraphDocument, instruction: str) -> LLMPatch:
+        if "泳道" in instruction:
+            return self._build_swimlane_patch(graph, instruction)
+
         if not graph.nodes or any(word in instruction for word in ("创建流程", "生成流程", "新建流程")):
             return self._create_flow(instruction)
-
-        match = re.search(
-            r"(?:增加|添加|创建|新建)(?:一个)?(?:名为)?(.+?)泳道[。.!！]?$",
-            instruction,
-        )
-        if match:
-            label = self._clean_label(match.group(1))
-            return LLMPatch(
-                change_summary=f"增加“{label}”泳道。",
-                operations=[
-                    {
-                        "op": "add_lane",
-                        "ref": "new_lane",
-                        "lane": {"label": label, "color": self._lane_color(len(graph.lanes))},
-                    }
-                ],
-            )
-
-        match = re.search(
-            r"(?:把|将)(.+?)(?:移到|移动到|放到)(.+?)泳道[。.!！]?$",
-            instruction,
-        )
-        if match:
-            node = self._find_node(graph, match.group(1))
-            lane = self._find_lane(graph, match.group(2))
-            return LLMPatch(
-                change_summary=f"将“{node.label}”移动到“{lane.label}”泳道。",
-                operations=[
-                    {"op": "update_node", "id": node.id, "changes": {"lane_id": lane.id}}
-                ],
-            )
 
         match = re.search(
             r"(?:给|为)(.+?)(?:增加|添加|设置|使用)(.+?)图标[。.!！]?$",
@@ -113,6 +85,131 @@ class LocalRuleProvider:
             return self._insert_before(graph, end_node, label)
         last_node = graph.nodes[-1]
         return self._insert_after(graph, last_node, label)
+
+    def _build_swimlane_patch(self, graph: GraphDocument, instruction: str) -> LLMPatch:
+        match = re.search(
+            r"(?:把|将)(.+?)(?:移到|移动到|放到)(.+?)泳道[。.!！]?$",
+            instruction,
+        )
+        if match:
+            node = self._find_node(graph, match.group(1))
+            lane = self._find_lane(graph, match.group(2))
+            return LLMPatch(
+                change_summary=f"将“{node.label}”移动到“{lane.label}”泳道。",
+                operations=[
+                    {"op": "update_node", "id": node.id, "changes": {"lane_id": lane.id}}
+                ],
+            )
+
+        match = re.search(
+            r"(?:把|将)(.+?)泳道(?:改名为|修改为|改成|改为)(.+?)[。.!！]?$",
+            instruction,
+        )
+        if match:
+            lane = self._find_lane(graph, match.group(1))
+            label = self._clean_label(match.group(2))
+            return LLMPatch(
+                change_summary=f"将“{lane.label}”泳道改名为“{label}”。",
+                operations=[
+                    {"op": "update_lane", "id": lane.id, "changes": {"label": label}}
+                ],
+            )
+
+        match = re.search(r"(?:删除|移除)(.+?)泳道[。.!！]?$", instruction)
+        if match:
+            lane = self._find_lane(graph, match.group(1))
+            return LLMPatch(
+                change_summary=f"删除“{lane.label}”泳道，保留其中节点。",
+                operations=[{"op": "remove_lane", "id": lane.id}],
+            )
+
+        labels = self._parse_lane_labels(instruction)
+        if labels:
+            existing = {lane.label for lane in graph.lanes}
+            new_labels = [label for label in labels if label not in existing]
+            if not new_labels:
+                from app.core.errors import ProviderError
+
+                raise ProviderError(
+                    "INSTRUCTION_LANE_ALREADY_EXISTS",
+                    "指令中的泳道已经存在。",
+                )
+            if len(graph.lanes) + len(new_labels) > 20:
+                from app.core.errors import ProviderError
+
+                raise ProviderError(
+                    "INSTRUCTION_LANE_LIMIT_EXCEEDED",
+                    "泳道总数不能超过 20 条。",
+                )
+            operations = [
+                {
+                    "op": "add_lane",
+                    "ref": f"new_lane_{index}",
+                    "lane": {
+                        "label": label,
+                        "color": self._lane_color(len(graph.lanes) + index - 1),
+                    },
+                }
+                for index, label in enumerate(new_labels, start=1)
+            ]
+            return LLMPatch(
+                change_summary=f"增加泳道：{'、'.join(new_labels)}。",
+                operations=operations,
+            )
+
+        from app.core.errors import ProviderError
+
+        raise ProviderError(
+            "INSTRUCTION_SWIMLANE_INVALID",
+            "没有识别出泳道操作，请使用“增加三个泳道：销售、物流、财务”等表达。",
+        )
+
+    @staticmethod
+    def _parse_lane_labels(instruction: str) -> list[str]:
+        content = instruction.strip(" 。.!！")
+        content = re.sub(r"^(?:请帮我|帮我|请)", "", content).strip()
+        create_match = re.match(r"^(?:增加|添加|新增|创建|新建)", content)
+        quantity_prefix = re.match(
+            r"^[一二两三四五六七八九十百\d]+(?:个|条)?泳道",
+            content,
+        )
+        labeled_prefix = re.match(r"^泳道\s*[:：]", content)
+        listed_suffix = re.search(
+            r"[、,，;；].+[一二两三四五六七八九十百\d]+(?:个|条)?泳道$",
+            content,
+        )
+        if not any((create_match, quantity_prefix, labeled_prefix, listed_suffix)):
+            return []
+        if create_match:
+            content = content[create_match.end() :].strip()
+
+        prefix = re.match(
+            r"^[一二两三四五六七八九十百\d]+(?:个|条)?泳道\s*[:：,，、]?\s*(.+)$",
+            content,
+        )
+        if prefix:
+            content = prefix.group(1)
+        else:
+            content = re.sub(
+                r"^[一二两三四五六七八九十百\d]+(?:个|条)?(?=\S)",
+                "",
+                content,
+            )
+            content = re.sub(r"^(?:泳道|名为)\s*[:：]?\s*", "", content)
+            content = re.sub(
+                r"(?:[一二两三四五六七八九十百\d]+(?:个|条)?)?(?:的)?泳道$",
+                "",
+                content,
+            )
+
+        content = re.sub(r"^(?:分别为|分别是|包括|包含)\s*", "", content).strip()
+        values = re.split(r"[、,，;；/]+|(?:以及|和)", content)
+        labels: list[str] = []
+        for value in values:
+            label = value.strip("“”\"' ：:，,。.!！的")
+            if label and label not in labels:
+                labels.append(label)
+        return labels
 
     def _create_flow(self, instruction: str) -> LLMPatch:
         candidates: list[tuple[str, NodeType]] = []

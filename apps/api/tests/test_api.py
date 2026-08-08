@@ -86,3 +86,44 @@ def test_local_provider_sets_supported_node_icon(order_graph):
     assert response.status_code == 200, response.text
     credit = next(node for node in response.json()["graph"]["nodes"] if node["id"] == "credit")
     assert credit["icon"] == "shield-check"
+
+
+def test_local_provider_creates_multiple_lanes_without_adding_process_nodes(order_graph):
+    original_node_ids = [node.id for node in order_graph.nodes]
+    instructions = (
+        "三个泳道，销售、物流、财务",
+        "增加泳道：销售、物流、财务",
+        "新增销售、物流、财务三个泳道",
+        "请帮我增加三个泳道：销售、物流、财务",
+    )
+
+    for index, instruction in enumerate(instructions):
+        response = client.post(
+            "/api/v1/flowcharts/modify",
+            json={
+                "request_id": f"request-multiple-lanes-{index}",
+                "current_graph": order_graph.model_dump(mode="json"),
+                "instruction": instruction,
+                "locale": "zh-CN",
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        graph = response.json()["graph"]
+        assert [lane["label"] for lane in graph["lanes"]] == ["销售", "物流", "财务"]
+        assert [node["id"] for node in graph["nodes"]] == original_node_ids
+
+
+def test_unrecognized_swimlane_instruction_never_falls_back_to_process_node(order_graph):
+    response = client.post(
+        "/api/v1/flowcharts/modify",
+        json={
+            "request_id": "request-invalid-lane",
+            "current_graph": order_graph.model_dump(mode="json"),
+            "instruction": "调整一下泳道",
+            "locale": "zh-CN",
+        },
+    )
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "INSTRUCTION_SWIMLANE_INVALID"
