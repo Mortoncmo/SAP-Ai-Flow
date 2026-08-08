@@ -9,12 +9,13 @@ from app.core.errors import ProviderError
 from app.models.graph import GraphDocument
 from app.models.patch import LLMPatch
 
-
 SYSTEM_PROMPT = """你是 SAP 业务流程建模助手。根据 current_graph 和 instruction，只输出 JSON Patch。
 必须保留未被指令涉及的节点与连线。禁止输出 Markdown、解释文字或思维过程。
 新增节点使用 ref，当前 Patch 内引用新节点时使用 @ref；已有节点使用输入中的永久 ID。
 合法节点类型：start、end、task、decision、subprocess。
-合法操作：add_node、remove_node、update_node、add_edge、remove_edge。
+节点可选 icon：user、building、shield-check、file-text、package、truck、circle-dollar-sign、clipboard-check。
+节点可通过 lane_id 归属泳道。创建泳道后使用 @ref 在同一 Patch 中引用。
+合法操作：add_node、remove_node、update_node、add_edge、remove_edge、add_lane、update_lane、remove_lane。
 输出字段必须是 change_summary 和 operations，并严格遵循提供的 JSON Schema。"""
 
 

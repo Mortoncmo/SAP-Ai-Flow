@@ -2,7 +2,6 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 
-
 client = TestClient(app)
 
 
@@ -42,3 +41,48 @@ def test_invalid_request_uses_stable_error_shape(order_graph):
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "REQUEST_VALIDATION_FAILED"
+
+
+def test_local_provider_creates_lane_and_moves_node(order_graph):
+    create_response = client.post(
+        "/api/v1/flowcharts/modify",
+        json={
+            "request_id": "request-lane-create",
+            "current_graph": order_graph.model_dump(mode="json"),
+            "instruction": "增加一个财务泳道",
+            "locale": "zh-CN",
+        },
+    )
+    created_graph = create_response.json()["graph"]
+    finance = next(lane for lane in created_graph["lanes"] if lane["label"] == "财务")
+
+    move_response = client.post(
+        "/api/v1/flowcharts/modify",
+        json={
+            "request_id": "request-lane-move",
+            "current_graph": created_graph,
+            "instruction": "把信用检查移动到财务泳道",
+            "locale": "zh-CN",
+        },
+    )
+
+    assert create_response.status_code == 200, create_response.text
+    assert move_response.status_code == 200, move_response.text
+    credit = next(node for node in move_response.json()["graph"]["nodes"] if node["id"] == "credit")
+    assert credit["lane_id"] == finance["id"]
+
+
+def test_local_provider_sets_supported_node_icon(order_graph):
+    response = client.post(
+        "/api/v1/flowcharts/modify",
+        json={
+            "request_id": "request-node-icon",
+            "current_graph": order_graph.model_dump(mode="json"),
+            "instruction": "给信用检查增加盾牌图标",
+            "locale": "zh-CN",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    credit = next(node for node in response.json()["graph"]["nodes"] if node["id"] == "credit")
+    assert credit["icon"] == "shield-check"

@@ -15,6 +15,17 @@ class NodeType(StrEnum):
     SUBPROCESS = "subprocess"
 
 
+class NodeIcon(StrEnum):
+    USER = "user"
+    BUILDING = "building"
+    SHIELD_CHECK = "shield-check"
+    FILE_TEXT = "file-text"
+    PACKAGE = "package"
+    TRUCK = "truck"
+    CIRCLE_DOLLAR_SIGN = "circle-dollar-sign"
+    CLIPBOARD_CHECK = "clipboard-check"
+
+
 class Position(StrictModel):
     x: float
     y: float
@@ -25,6 +36,14 @@ class Node(StrictModel):
     type: NodeType
     label: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=1000)
+    icon: NodeIcon | None = None
+    lane_id: str | None = Field(default=None, min_length=1, max_length=80)
+
+
+class Swimlane(StrictModel):
+    id: str = Field(min_length=1, max_length=80)
+    label: str = Field(min_length=1, max_length=80)
+    color: str = Field(default="#52796f", pattern="^#[0-9a-fA-F]{6}$")
 
 
 class Edge(StrictModel):
@@ -42,6 +61,7 @@ class GraphDocument(StrictModel):
     direction: str = Field(default="TB", pattern="^(TB|LR)$")
     nodes: list[Node] = Field(default_factory=list, max_length=500)
     edges: list[Edge] = Field(default_factory=list, max_length=1000)
+    lanes: list[Swimlane] = Field(default_factory=list, max_length=20)
     layout: dict[str, Position] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -55,6 +75,15 @@ class GraphDocument(StrictModel):
             raise ValueError("Edge IDs must be unique")
 
         known_nodes = set(node_ids)
+        lane_ids = [lane.id for lane in self.lanes]
+        if len(lane_ids) != len(set(lane_ids)):
+            raise ValueError("Swimlane IDs must be unique")
+        known_lanes = set(lane_ids)
+
+        for node in self.nodes:
+            if node.lane_id is not None and node.lane_id not in known_lanes:
+                raise ValueError(f"Node {node.id} references an unknown swimlane")
+
         for edge in self.edges:
             if edge.source not in known_nodes or edge.target not in known_nodes:
                 raise ValueError(f"Edge {edge.id} references an unknown node")

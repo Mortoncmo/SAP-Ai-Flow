@@ -1,5 +1,16 @@
 export type NodeType = 'start' | 'end' | 'task' | 'decision' | 'subprocess'
 export type Direction = 'TB' | 'LR'
+export const nodeIconKeys = [
+  'user',
+  'building',
+  'shield-check',
+  'file-text',
+  'package',
+  'truck',
+  'circle-dollar-sign',
+  'clipboard-check',
+] as const
+export type NodeIcon = (typeof nodeIconKeys)[number]
 
 export interface Position {
   x: number
@@ -11,6 +22,14 @@ export interface FlowNode {
   type: NodeType
   label: string
   description: string | null
+  icon: NodeIcon | null
+  lane_id: string | null
+}
+
+export interface Swimlane {
+  id: string
+  label: string
+  color: string
 }
 
 export interface FlowEdge {
@@ -28,6 +47,7 @@ export interface GraphDocument {
   direction: Direction
   nodes: FlowNode[]
   edges: FlowEdge[]
+  lanes: Swimlane[]
   layout: Record<string, Position>
 }
 

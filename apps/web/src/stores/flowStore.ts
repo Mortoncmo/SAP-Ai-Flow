@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { createSampleGraph } from '../data'
+import { createSampleGraph, normalizeGraph } from '../data'
 import { layoutGraph } from '../flow/layout'
 import type { GraphDocument } from '../types'
 
@@ -56,12 +56,12 @@ export const useFlowStore = create<FlowState>()(
     }),
     {
       name: 'sap-ai-flow-state',
-      version: 2,
+      version: 3,
       partialize: (state) => ({ graph: state.graph }),
       migrate: (persistedState) => {
         const state = persistedState as { graph?: GraphDocument }
         return {
-          graph: state.graph ? layoutGraph(state.graph) : initialGraph,
+          graph: state.graph ? layoutGraph(normalizeGraph(state.graph)) : initialGraph,
         }
       },
     },

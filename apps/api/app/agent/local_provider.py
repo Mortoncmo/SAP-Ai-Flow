@@ -1,7 +1,7 @@
 import re
 
 from app.agent.base import ProviderResult
-from app.models.graph import GraphDocument, Node, NodeType
+from app.models.graph import GraphDocument, Node, NodeIcon, NodeType, Swimlane
 from app.models.patch import LLMPatch
 
 
@@ -21,6 +21,59 @@ class LocalRuleProvider:
     def _build_patch(self, graph: GraphDocument, instruction: str) -> LLMPatch:
         if not graph.nodes or any(word in instruction for word in ("创建流程", "生成流程", "新建流程")):
             return self._create_flow(instruction)
+
+        match = re.search(
+            r"(?:增加|添加|创建|新建)(?:一个)?(?:名为)?(.+?)泳道[。.!！]?$",
+            instruction,
+        )
+        if match:
+            label = self._clean_label(match.group(1))
+            return LLMPatch(
+                change_summary=f"增加“{label}”泳道。",
+                operations=[
+                    {
+                        "op": "add_lane",
+                        "ref": "new_lane",
+                        "lane": {"label": label, "color": self._lane_color(len(graph.lanes))},
+                    }
+                ],
+            )
+
+        match = re.search(
+            r"(?:把|将)(.+?)(?:移到|移动到|放到)(.+?)泳道[。.!！]?$",
+            instruction,
+        )
+        if match:
+            node = self._find_node(graph, match.group(1))
+            lane = self._find_lane(graph, match.group(2))
+            return LLMPatch(
+                change_summary=f"将“{node.label}”移动到“{lane.label}”泳道。",
+                operations=[
+                    {"op": "update_node", "id": node.id, "changes": {"lane_id": lane.id}}
+                ],
+            )
+
+        match = re.search(
+            r"(?:给|为)(.+?)(?:增加|添加|设置|使用)(.+?)图标[。.!！]?$",
+            instruction,
+        )
+        if match:
+            node = self._find_node(graph, match.group(1))
+            icon = self._parse_icon(match.group(2))
+            return LLMPatch(
+                change_summary=f"为“{node.label}”设置图标。",
+                operations=[
+                    {"op": "update_node", "id": node.id, "changes": {"icon": icon.value}}
+                ],
+            )
+
+        match = re.search(r"(?:移除|删除|清除)(.+?)的?图标[。.!！]?$", instruction)
+        if match:
+            node = self._find_node(graph, match.group(1))
+            return LLMPatch(
+                change_summary=f"移除“{node.label}”的图标。",
+                operations=[{"op": "update_node", "id": node.id, "changes": {"icon": None}}],
+            )
 
         match = re.search(r"在(.+?)(?:之后|后面|后)增加(?:一个)?(.+?)(?:节点)?[。.!！]?$", instruction)
         if match:
@@ -91,7 +144,11 @@ class LocalRuleProvider:
                 {
                     "op": "add_node",
                     "ref": ref,
-                    "node": {"type": node_type.value, "label": label},
+                    "node": {
+                        "type": node_type.value,
+                        "label": label,
+                        "icon": self._guess_icon(label),
+                    },
                 }
             )
         for index in range(len(nodes) - 1):
@@ -117,7 +174,12 @@ class LocalRuleProvider:
             {
                 "op": "add_node",
                 "ref": "new_step",
-                "node": {"type": self._guess_type(label).value, "label": label},
+                "node": {
+                    "type": self._guess_type(label).value,
+                    "label": label,
+                    "icon": self._guess_icon(label),
+                    "lane_id": anchor.lane_id,
+                },
             }
         ]
         if preferred:
@@ -156,7 +218,12 @@ class LocalRuleProvider:
             {
                 "op": "add_node",
                 "ref": "new_step",
-                "node": {"type": self._guess_type(label).value, "label": label},
+                "node": {
+                    "type": self._guess_type(label).value,
+                    "label": label,
+                    "icon": self._guess_icon(label),
+                    "lane_id": anchor.lane_id,
+                },
             }
         ]
         if incoming:
@@ -209,11 +276,30 @@ class LocalRuleProvider:
         return node
 
     @staticmethod
+    def _find_lane(graph: GraphDocument, fragment: str) -> Swimlane:
+        needle = fragment.strip("“”\"' ，,的")
+        lane = next(
+            (
+                item
+                for item in graph.lanes
+                if item.label == needle or needle in item.label or item.label in needle
+            ),
+            None,
+        )
+        if lane is None:
+            from app.core.errors import ProviderError
+
+            raise ProviderError(
+                "INSTRUCTION_LANE_NOT_FOUND",
+                f"没有找到与“{needle}”匹配的泳道。",
+            )
+        return lane
+
+    @staticmethod
     def _clean_label(value: str) -> str:
         label = value.strip("“”\"' ，,。.!！")
         for suffix in ("这个节点", "的节点", "节点"):
-            if label.endswith(suffix):
-                label = label[: -len(suffix)]
+            label = label.removesuffix(suffix)
         return label.strip() or "新处理步骤"
 
     @staticmethod
@@ -227,3 +313,63 @@ class LocalRuleProvider:
         if "子流程" in label:
             return NodeType.SUBPROCESS
         return NodeType.TASK
+
+    @staticmethod
+    def _guess_icon(label: str) -> str | None:
+        mappings = (
+            (("审批", "确认", "检查", "校验"), NodeIcon.CLIPBOARD_CHECK),
+            (("信用", "风控"), NodeIcon.SHIELD_CHECK),
+            (("订单", "申请", "发票", "单据"), NodeIcon.FILE_TEXT),
+            (("仓库", "库存", "物料"), NodeIcon.PACKAGE),
+            (("发货", "运输", "交付"), NodeIcon.TRUCK),
+            (("付款", "金额", "收款"), NodeIcon.CIRCLE_DOLLAR_SIGN),
+            (("经理", "用户", "人员"), NodeIcon.USER),
+            (("公司", "组织", "部门"), NodeIcon.BUILDING),
+        )
+        for keywords, icon in mappings:
+            if any(keyword in label for keyword in keywords):
+                return icon.value
+        return None
+
+    @staticmethod
+    def _parse_icon(value: str) -> NodeIcon:
+        normalized = value.strip("“”\"' ，,")
+        mappings = {
+            "人员": NodeIcon.USER,
+            "用户": NodeIcon.USER,
+            "经理": NodeIcon.USER,
+            "组织": NodeIcon.BUILDING,
+            "公司": NodeIcon.BUILDING,
+            "建筑": NodeIcon.BUILDING,
+            "盾牌": NodeIcon.SHIELD_CHECK,
+            "安全": NodeIcon.SHIELD_CHECK,
+            "风控": NodeIcon.SHIELD_CHECK,
+            "文件": NodeIcon.FILE_TEXT,
+            "单据": NodeIcon.FILE_TEXT,
+            "文档": NodeIcon.FILE_TEXT,
+            "包裹": NodeIcon.PACKAGE,
+            "物料": NodeIcon.PACKAGE,
+            "仓库": NodeIcon.PACKAGE,
+            "卡车": NodeIcon.TRUCK,
+            "运输": NodeIcon.TRUCK,
+            "货车": NodeIcon.TRUCK,
+            "金额": NodeIcon.CIRCLE_DOLLAR_SIGN,
+            "付款": NodeIcon.CIRCLE_DOLLAR_SIGN,
+            "财务": NodeIcon.CIRCLE_DOLLAR_SIGN,
+            "审批": NodeIcon.CLIPBOARD_CHECK,
+            "检查": NodeIcon.CLIPBOARD_CHECK,
+            "勾选": NodeIcon.CLIPBOARD_CHECK,
+        }
+        for keyword, icon in mappings.items():
+            if keyword in normalized:
+                return icon
+        from app.core.errors import ProviderError
+
+        raise ProviderError(
+            "INSTRUCTION_ICON_NOT_SUPPORTED",
+            f"暂不支持“{normalized}”图标。",
+        )
+
+    @staticmethod
+    def _lane_color(index: int) -> str:
+        return ("#52796f", "#5b7394", "#a36f3f", "#7b668f", "#547f86")[index % 5]

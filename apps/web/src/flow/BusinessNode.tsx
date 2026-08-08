@@ -1,12 +1,14 @@
 import type { Node, NodeProps } from '@xyflow/react'
 import { Handle, Position } from '@xyflow/react'
-import type { Direction, NodeType } from '../types'
+import type { Direction, NodeIcon, NodeType } from '../types'
+import { NodeIconGlyph } from './nodeIcons'
 
 export interface BusinessNodeData extends Record<string, unknown> {
   label: string
   description: string | null
   nodeType: NodeType
   direction: Direction
+  icon: NodeIcon | null
 }
 
 export type BusinessNodeModel = Node<BusinessNodeData, 'business'>
@@ -26,6 +28,11 @@ export function BusinessNode({ data, selected }: NodeProps<BusinessNodeModel>) {
         />
       )}
       <span className="business-node__text">
+        {data.icon && (
+          <span className="business-node__icon">
+            <NodeIconGlyph icon={data.icon} />
+          </span>
+        )}
         <strong>{data.label}</strong>
       </span>
       {allowsOutgoing && (

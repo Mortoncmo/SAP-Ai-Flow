@@ -31,14 +31,17 @@ import {
 } from 'lucide-react'
 import { ApiError, modifyFlowchart } from './api/client'
 import { Inspector } from './components/Inspector'
-import { createEmptyGraph, createId } from './data'
+import { createEmptyGraph, createId, normalizeGraph } from './data'
 import { buildExportFilename, downloadBlob, downloadUrl } from './export'
 import { BusinessNode, BusinessNodeData, BusinessNodeModel } from './flow/BusinessNode'
-import { layoutGraph, nodeDimensions } from './flow/layout'
+import { LaneNode, LaneNodeData, LaneNodeModel } from './flow/LaneNode'
+import { laneFrames, laneIdAtPosition, layoutGraph, nodeDimensions } from './flow/layout'
 import { useFlowStore } from './stores/flowStore'
 import type { GraphDocument } from './types'
 
-const nodeTypes = { business: BusinessNode }
+type VisualNode = BusinessNodeModel | LaneNodeModel
+
+const nodeTypes = { business: BusinessNode, lane: LaneNode }
 
 function FlowWorkspace() {
   const graph = useFlowStore((state) => state.graph)
@@ -70,9 +73,30 @@ function FlowWorkspace() {
     return () => window.removeEventListener('resize', handleResize)
   }, [fitCanvas])
 
-  const visualNodes = useMemo<BusinessNodeModel[]>(
-    () =>
-      graph.nodes.map((node) => ({
+  const visualNodes = useMemo<VisualNode[]>(
+    () => {
+      const laneNodes: LaneNodeModel[] = laneFrames(graph).map((frame) => {
+        const lane = graph.lanes.find((item) => item.id === frame.id)!
+        return {
+          id: `lane-visual-${lane.id}`,
+          type: 'lane',
+          position: { x: frame.x, y: frame.y },
+          style: { width: frame.width, height: frame.height, zIndex: -2 },
+          data: {
+            label: lane.label,
+            color: lane.color,
+            direction: graph.direction,
+            nodeCount: graph.nodes.filter((node) => node.lane_id === lane.id).length,
+          } satisfies LaneNodeData,
+          draggable: false,
+          selectable: false,
+          deletable: false,
+          connectable: false,
+          focusable: false,
+          zIndex: -2,
+        }
+      })
+      const businessNodes: BusinessNodeModel[] = graph.nodes.map((node) => ({
         id: node.id,
         type: 'business',
         position: { ...(graph.layout[node.id] ?? { x: 0, y: 0 }) },
@@ -82,12 +106,16 @@ function FlowWorkspace() {
           description: node.description,
           nodeType: node.type,
           direction: graph.direction,
+          icon: node.icon,
         } satisfies BusinessNodeData,
         selected: node.id === selectedNodeId,
-      })),
+        zIndex: 2,
+      }))
+      return [...laneNodes, ...businessNodes]
+    },
     [graph, selectedNodeId],
   )
-  const [nodes, setNodes, onNodesChange] = useNodesState<BusinessNodeModel>(visualNodes)
+  const [nodes, setNodes, onNodesChange] = useNodesState<VisualNode>(visualNodes)
 
   useEffect(() => setNodes(visualNodes), [setNodes, visualNodes])
 
@@ -122,7 +150,7 @@ function FlowWorkspace() {
       if (useFlowStore.getState().graph.version !== baseVersion) {
         throw new ApiError('画布已发生变化，本次响应未应用。', 'STALE_RESPONSE')
       }
-      commitGraph(layoutGraph(response.graph))
+      commitGraph(layoutGraph(normalizeGraph(response.graph)))
       fitCanvas()
       setInstruction('')
       setMessage(
@@ -171,7 +199,8 @@ function FlowWorkspace() {
       if (parsed.schema_version !== '1.0' || !Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) {
         throw new Error('文件不是有效的 SAP AI Flow JSON。')
       }
-      commitGraph(Object.keys(parsed.layout ?? {}).length ? parsed : layoutGraph(parsed))
+      const normalized = normalizeGraph(parsed)
+      commitGraph(Object.keys(normalized.layout ?? {}).length ? normalized : layoutGraph(normalized))
       fitCanvas()
       setMessage(`已导入 ${file.name}`)
       setError('')
@@ -327,23 +356,33 @@ function FlowWorkspace() {
 
       <main className={`workspace${inspectorOpen ? '' : ' inspector-closed'}`}>
         <section className="canvas-region" aria-label="流程图画布">
-          <ReactFlow<BusinessNodeModel>
+          <ReactFlow<VisualNode>
             nodes={nodes}
             edges={visualEdges}
             nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
             onConnect={handleConnect}
-            onNodeClick={(_, node) => setSelectedNodeId(node.id)}
+            onNodeClick={(_, node) => {
+              if (node.type === 'business') setSelectedNodeId(node.id)
+            }}
             onPaneClick={() => setSelectedNodeId(null)}
-            onNodeDragStop={(_, node) =>
+            onNodeDragStop={(_, node) => {
+              if (node.type !== 'business') return
+              const laneId = laneIdAtPosition(graph, node.position, nodeDimensions(node.data.nodeType))
               commitGraph({
                 ...graph,
                 version: graph.version + 1,
+                nodes: graph.nodes.map((item) =>
+                  item.id === node.id ? { ...item, lane_id: laneId } : item,
+                ),
                 layout: { ...graph.layout, [node.id]: node.position },
               })
-            }
+            }}
             onNodesDelete={(deleted: Node[]) => {
-              const ids = new Set(deleted.map((node) => node.id))
+              const ids = new Set(
+                deleted.filter((node) => node.type === 'business').map((node) => node.id),
+              )
+              if (ids.size === 0) return
               commitGraph({
                 ...graph,
                 version: graph.version + 1,
@@ -374,7 +413,11 @@ function FlowWorkspace() {
               position="bottom-right"
               pannable
               zoomable
-              nodeColor={(node) => nodeColor((node.data as BusinessNodeData).nodeType)}
+              nodeColor={(node) =>
+                node.type === 'lane'
+                  ? (node.data as LaneNodeData).color
+                  : nodeColor((node.data as BusinessNodeData).nodeType)
+              }
               maskColor="rgba(247, 247, 244, 0.78)"
             />
             {graph.nodes.length === 0 && (
