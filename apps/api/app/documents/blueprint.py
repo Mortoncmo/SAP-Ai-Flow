@@ -198,25 +198,25 @@ def render_graph_png(graph: GraphDocument) -> BytesIO:
     }
     node_order = {node.id: index for index, node in enumerate(graph.nodes)}
     width = max(1400, 300 + max(len(graph.nodes), 1) * 230)
-    height = max(420, 86 + len(lane_entries) * 210)
+    height = max(420, 86 + len(lane_entries) * 230)
     image = Image.new("RGB", (width, height), "#F7F7F4")
     draw = ImageDraw.Draw(image)
     font = _font(32)
-    small_font = _font(28)
+    small_font = _font(26)
     centers: dict[str, tuple[int, int]] = {}
     boxes: dict[str, tuple[int, int, int, int]] = {}
 
     for lane_index, (lane_id, label, color) in enumerate(lane_entries):
-        top = 56 + lane_index * 210
-        bottom = top + 188
+        top = 56 + lane_index * 230
+        bottom = top + 208
         draw.rounded_rectangle((22, top, width - 22, bottom), radius=8, fill="#FFFFFF", outline=color, width=3)
         draw.rectangle((22, top, 210, bottom), fill=_blend(color, 0.13), outline=color, width=2)
         draw.multiline_text((42, top + 53), _wrap(label, 7), font=font, fill="#26322B", spacing=4)
         nodes = grouped[lane_id]
         for node in nodes:
             x = 245 + node_order[node.id] * 230
-            y = top + 36
-            box = (x, y, x + 178, y + 120)
+            y = top + 30
+            box = (x, y, x + 196, y + 150)
             boxes[node.id] = box
             centers[node.id] = ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2)
 
@@ -237,13 +237,15 @@ def render_graph_png(graph: GraphDocument) -> BytesIO:
         else:
             radius = 38 if node.type in {"start", "end"} else 5
             draw.rounded_rectangle(box, radius=radius, fill="#FFFFFF", outline=color, width=3)
-        text = _wrap(node.label, 11)
+        text = _wrap(node.label, 6)
         text_box = draw.multiline_textbbox((0, 0), text, font=small_font, align="center", spacing=3)
         text_width = text_box[2] - text_box[0]
         text_height = text_box[3] - text_box[1]
         cx, cy = centers[node.id]
+        text_bottom = box[3] - (30 if node.sap.tcodes else 0)
+        text_center_y = (box[1] + text_bottom) / 2
         draw.multiline_text(
-            (cx - text_width / 2, cy - text_height / 2 - 2),
+            (cx - text_width / 2, text_center_y - text_height / 2 - 2),
             text,
             font=small_font,
             fill="#26322B",
@@ -251,7 +253,7 @@ def render_graph_png(graph: GraphDocument) -> BytesIO:
             spacing=3,
         )
         if node.sap.tcodes:
-            draw.text((box[0] + 7, box[3] - 25), node.sap.tcodes[0].code, font=_font(20), fill="#52796F")
+            draw.text((box[0] + 7, box[3] - 24), node.sap.tcodes[0].code, font=_font(18), fill="#52796F")
 
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)
@@ -490,6 +492,9 @@ def _set_table_geometry(table, widths: list[int]) -> None:
         column.set(qn("w:w"), str(value))
         grid.append(column)
     for row in table.rows:
+        row_properties = row._tr.get_or_add_trPr()
+        if row_properties.find(qn("w:cantSplit")) is None:
+            row_properties.append(OxmlElement("w:cantSplit"))
         for cell, value in zip(row.cells, widths, strict=True):
             tc_width = cell._tc.get_or_add_tcPr().get_or_add_tcW()
             tc_width.set(qn("w:type"), "dxa")
@@ -715,8 +720,8 @@ def _blend(color: str, ratio: float) -> str:
 def _draw_arrow(draw, source, target, label: str | None, font) -> None:
     sx, sy = source
     tx, ty = target
-    start = (sx + (48 if tx >= sx else -48), sy)
-    end = (tx - (48 if tx >= sx else -48), ty)
+    start = (sx + (104 if tx >= sx else -104), sy)
+    end = (tx - (104 if tx >= sx else -104), ty)
     draw.line((start, end), fill="#68736D", width=3)
     direction = 1 if end[0] >= start[0] else -1
     arrow = [(end[0], end[1]), (end[0] - direction * 12, end[1] - 7), (end[0] - direction * 12, end[1] + 7)]

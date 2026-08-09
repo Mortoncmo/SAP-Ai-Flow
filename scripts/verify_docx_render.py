@@ -299,6 +299,16 @@ def verify(output_dir: Path, *, generate_only: bool = False) -> Path:
     document = Document(docx_path)
     if len(document.tables) < 5 or not document.inline_shapes:
         raise RuntimeError("Generated DOCX is missing required tables or the process diagram")
+    structural_text = "\n".join(
+        cell.text for table in document.tables for row in table.rows for cell in row.cells
+    )
+    structural_labels = [
+        "创建直接物料采购申请并补充成本对象",
+        "采购订单输出前调用外部信用校验接口",
+    ]
+    missing_structural_labels = [label for label in structural_labels if label not in structural_text]
+    if missing_structural_labels:
+        raise RuntimeError(f"Generated DOCX is missing full node labels: {missing_structural_labels}")
     if generate_only:
         print(f"Generated structural DOCX fixture: {docx_path}")
         return docx_path
@@ -361,8 +371,10 @@ def verify(output_dir: Path, *, generate_only: bool = False) -> Path:
         "4. SAP 元数据与证据",
         "5. GAP List",
         "6. 版本信息",
-        "创建直接物料采购申请并补充成本对象",
-        "采购订单输出前调用外部信用校验接口",
+        "创建直接物料采购申请",
+        "补充成本对象",
+        "采购订单输出前调用外部",
+        "信用校验接口",
         "ME51N",
         "J45",
     ]

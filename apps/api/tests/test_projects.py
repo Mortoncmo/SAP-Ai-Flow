@@ -9,6 +9,7 @@ from urllib.parse import unquote
 import pytest
 from docx import Document
 from docx.enum.section import WD_ORIENT
+from docx.oxml.ns import qn
 from docx.shared import Inches
 from fastapi.testclient import TestClient
 from sqlalchemy import event, func, select
@@ -533,6 +534,11 @@ def test_persisted_modify_revision_release_and_changelog(persistence_client):
         if any(cell.text == "步骤" for cell in table.rows[0].cells)
     )
     assert len(steps_table.rows) - 1 == len(payload["graph"]["nodes"])
+    assert all(
+        row._tr.get_or_add_trPr().find(qn("w:cantSplit")) is not None
+        for table in document.tables
+        for row in table.rows
+    )
     word_cells = "\n".join(
         cell.text for table in document.tables for row in table.rows for cell in row.cells
     )
