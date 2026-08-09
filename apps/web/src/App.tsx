@@ -604,6 +604,7 @@ function FlowWorkspace({
       setError('当前画布有未保存修改，请先保存后再执行自然语言修改。')
       setMessage('当前画布未变更')
       setPending(false)
+      abortRef.current = null
       return
     }
     try {
@@ -649,6 +650,12 @@ function FlowWorkspace({
     } catch (caught) {
       if ((caught as Error).name === 'AbortError') {
         setMessage('已取消本次修改')
+      } else if (caught instanceof ApiError && caught.code === 'REQUEST_TIMEOUT') {
+        setError(`${caught.message} 原指令已保留，可直接重试。`)
+        setMessage('当前画布未变更')
+      } else if (caught instanceof ApiError && caught.code === 'REVISION_CONFLICT') {
+        setError(`${caught.message} 可先导出当前 JSON 备份，再重新打开流程。`)
+        setMessage('当前画布未变更')
       } else {
         setError(caught instanceof Error ? caught.message : '流程修改失败')
         setMessage('当前画布未变更')

@@ -112,10 +112,14 @@ try {
         $previousDatabaseUrl = [Environment]::GetEnvironmentVariable("DATABASE_URL")
         $previousCorsOrigins = [Environment]::GetEnvironmentVariable("CORS_ORIGINS")
         $previousApiUrl = [Environment]::GetEnvironmentVariable("VITE_API_URL")
+        $previousApiTimeout = [Environment]::GetEnvironmentVariable("VITE_API_TIMEOUT_MS")
+        $previousExportTimeout = [Environment]::GetEnvironmentVariable("VITE_EXPORT_TIMEOUT_MS")
         try {
             $env:DATABASE_URL = "sqlite:///$databasePath"
             $env:CORS_ORIGINS = ConvertTo-Json -InputObject @($BaseUrl) -Compress
             $env:VITE_API_URL = $apiUrl
+            $env:VITE_API_TIMEOUT_MS = "2000"
+            $env:VITE_EXPORT_TIMEOUT_MS = "44000"
             $apiProcess = Start-Process -FilePath $python `
                 -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "$ApiPort") `
                 -WorkingDirectory (Join-Path $workspaceRoot "apps\api") `
@@ -135,15 +139,18 @@ try {
             Restore-EnvironmentValue -Name "DATABASE_URL" -Value $previousDatabaseUrl
             Restore-EnvironmentValue -Name "CORS_ORIGINS" -Value $previousCorsOrigins
             Restore-EnvironmentValue -Name "VITE_API_URL" -Value $previousApiUrl
+            Restore-EnvironmentValue -Name "VITE_API_TIMEOUT_MS" -Value $previousApiTimeout
+            Restore-EnvironmentValue -Name "VITE_EXPORT_TIMEOUT_MS" -Value $previousExportTimeout
         }
 
         Wait-HttpReady -Url "$apiUrl/health/ready"
         Wait-HttpReady -Url $BaseUrl
     }
 
-    Invoke-Playwright @("open", $BaseUrl) | Out-Null
+    $browserUrl = if ($managedServers) { "$BaseUrl/?browserSmokeManaged=1" } else { $BaseUrl }
+    Invoke-Playwright @("open", $browserUrl) | Out-Null
     Invoke-Playwright @("run-code", "--filename", $codeFile) | Out-Null
-    Write-Host "Browser smoke passed: lanes, members, model policy, persisted release lifecycle, viewer permissions, blueprint downloads, responsive widths, and browser errors."
+    Write-Host "Browser smoke passed: local undo/redo/layout/recovery, lanes, members, model policy, cancel/timeout/conflict recovery, local P95 budget, persisted release lifecycle, viewer permissions, blueprint downloads, responsive widths, and browser errors."
 }
 finally {
     try { Invoke-Playwright @("close") | Out-Null } catch { }

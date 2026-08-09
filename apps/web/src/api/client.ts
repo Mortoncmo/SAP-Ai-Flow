@@ -19,6 +19,14 @@ import { parseDownloadFilename } from '../export'
 import { getAccessToken } from '../auth/oidc'
 
 const API_ROOT = import.meta.env.VITE_API_URL ?? ''
+export const API_REQUEST_TIMEOUT_MS = timeoutValue(
+  import.meta.env.VITE_API_TIMEOUT_MS,
+  40_000,
+)
+export const EXPORT_REQUEST_TIMEOUT_MS = timeoutValue(
+  import.meta.env.VITE_EXPORT_TIMEOUT_MS,
+  44_000,
+)
 
 export class ApiError extends Error {
   constructor(
@@ -305,7 +313,7 @@ export async function exportBlueprint(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ revision_no: revisionNo, format }),
     signal,
-  })
+  }, EXPORT_REQUEST_TIMEOUT_MS)
   if (!response.ok) {
     const payload = await response.json()
     throw new ApiError(payload?.error?.message ?? '蓝图导出失败。', payload?.error?.code)
@@ -363,16 +371,51 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   return payload as T
 }
 
-async function authorizedFetch(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
-  const accessToken = await getAccessToken()
-  const headers = new Headers(init.headers)
-  if (!headers.has('X-Request-ID')) {
-    headers.set('X-Request-ID', `web_${crypto.randomUUID().replaceAll('-', '')}`)
+async function authorizedFetch(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs = API_REQUEST_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController()
+  const externalSignal = init.signal
+  let timedOut = false
+  const forwardAbort = () => controller.abort(externalSignal?.reason)
+  if (externalSignal?.aborted) {
+    forwardAbort()
+  } else {
+    externalSignal?.addEventListener('abort', forwardAbort, { once: true })
   }
-  if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
-  return fetch(input, { ...init, headers })
+  const timeoutId = globalThis.setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+
+  try {
+    const accessToken = await getAccessToken()
+    const headers = new Headers(init.headers)
+    if (!headers.has('X-Request-ID')) {
+      headers.set('X-Request-ID', `web_${crypto.randomUUID().replaceAll('-', '')}`)
+    }
+    if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
+    return await fetch(input, { ...init, headers, signal: controller.signal })
+  } catch (caught) {
+    if (timedOut) {
+      throw new ApiError('请求超时，当前数据未改变，请重试。', 'REQUEST_TIMEOUT')
+    }
+    throw caught
+  } finally {
+    globalThis.clearTimeout(timeoutId)
+    externalSignal?.removeEventListener('abort', forwardAbort)
+  }
 }
 
 function createRequestId(): string {
   return `web_${crypto.randomUUID().replaceAll('-', '')}`
+}
+
+function timeoutValue(raw: string | undefined, fallback: number): number {
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) && parsed >= 1_000 && parsed <= 120_000
+    ? Math.floor(parsed)
+    : fallback
 }

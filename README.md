@@ -77,11 +77,19 @@ Web 地址为 `http://localhost:5173`。Vite 会把 `/api` 和 `/health` 代理�
 AGENT_PROVIDER=deepseek
 DEEPSEEK_API_KEY=<your-api-key>
 DEEPSEEK_MODEL=deepseek-chat
+LLM_TIMEOUT_SECONDS=10
+LLM_TOTAL_TIMEOUT_SECONDS=35
+LLM_MAX_RETRIES=2
+LLM_RETRY_BACKOFF_SECONDS=0.25
+VITE_API_TIMEOUT_MS=40000
+VITE_EXPORT_TIMEOUT_MS=44000
 ```
 
 `.env` 已被 Git 忽略，API Key 不应添加到前端变量、日志或提交记录中。
 
 即使服务端配置了 DeepSeek，新项目仍默认使用“仅本地”策略。项目管理员可在“项目成员”弹窗中显式切换为“允许调用”；启用前界面会提示数据外发，策略变化写入项目审计。项目未启用时，持久化流程修改不会调用外部 Provider，而是回退本地规则并返回 warning。发送给 DeepSeek 的流程和指令会先脱敏客户、供应商、联系人、邮箱、电话和金额等字段。
+
+DeepSeek 单次请求默认 10 秒，最多重试 2 次，但整个 Provider 调用不会超过 35 秒。超时、网络错误、429、5xx 和结构化输出不合法可重试；认证错误和其他 4xx 立即失败。Web 普通 API 默认 40 秒超时，导出默认 44 秒，Nginx 代理为 45 秒。超时、用户取消或修订冲突不会应用迟到响应，原修改指令会保留供重试。这些 Vite 变量会写入构建产物，调整后需要重新构建 Web。
 
 未配置时保持 `AGENT_PROVIDER=local`。本地规则引擎支持以下演示指令：
 
@@ -178,7 +186,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\browser_smoke.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\browser_smoke.ps1 -BaseUrl http://127.0.0.1:5173
 ```
 
-自动化测试默认使用本地 Provider，不会产生模型调用费用。浏览器 smoke 使用独立 Playwright CLI 会话；未提供 `-BaseUrl` 时会自动分配端口，启动当前工作区代码和 `output/browser-smoke` 下的隔离 SQLite 数据库，完成后关闭进程。它验证按钮/自然语言泳道操作不增加流程节点、项目成员增改删、外部模型二次确认及审计、持久化修改/发布/历史回看/新草稿、管理员与 `viewer` 权限、Markdown/Word 实际下载、1440 x 900、1024 x 768、390 x 844 无横向溢出，以及控制台和页面无错误。临时运行产物位于已忽略的 `output/browser-smoke` 和 `.playwright-cli` 目录。
+自动化测试默认使用本地 Provider，不会产生模型调用费用。浏览器 smoke 使用独立 Playwright CLI 会话；未提供 `-BaseUrl` 时会自动分配端口，启动当前工作区代码和 `output/browser-smoke` 下的隔离 SQLite 数据库，完成后关闭进程。它验证本地撤销/重做/自动布局/刷新恢复、按钮与自然语言泳道操作不增加流程节点、项目成员增改删、外部模型二次确认及审计、取消/超时/修订冲突保图和重试、纯本地 Patch P95 小于 1 秒、持久化修改/发布/历史回看/新草稿、管理员与 `viewer` 权限、Markdown/Word 实际下载、1440 x 900、1024 x 768、390 x 844 无横向溢出，以及控制台和页面无错误。刷新只恢复当前图，撤销/重做栈不跨刷新保留。临时运行产物位于已忽略的 `output/browser-smoke` 和 `.playwright-cli` 目录。
 
 ## Docker Compose
 

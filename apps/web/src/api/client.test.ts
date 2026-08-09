@@ -6,6 +6,7 @@ import { getAccessToken } from '../auth/oidc'
 
 import {
   addProjectMember,
+  API_REQUEST_TIMEOUT_MS,
   ApiError,
   exportBlueprint,
   listProjectMembers,
@@ -16,6 +17,17 @@ import {
 } from './client'
 
 const getAccessTokenMock = vi.mocked(getAccessToken)
+
+const abortableFetch: typeof fetch = (_input, init) =>
+  new Promise((_resolve, reject) => {
+    const signal = init?.signal
+    const rejectAbort = () => reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'))
+    if (signal?.aborted) {
+      rejectAbort()
+      return
+    }
+    signal?.addEventListener('abort', rejectAbort, { once: true })
+  })
 
 beforeEach(() => {
   getAccessTokenMock.mockReset()
@@ -46,7 +58,7 @@ describe('project member client', () => {
     await expect(listProjectMembers('project / 1')).resolves.toEqual([member])
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/v1/projects/project%20%2F%201/members',
-      expect.objectContaining({ signal: undefined }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     )
     expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get('X-Request-ID')).toMatch(/^web_[a-f0-9]+$/)
   })
@@ -87,7 +99,7 @@ describe('project member client', () => {
     ])
     expect(fetchMock.mock.calls[2]).toEqual([
       '/api/v1/projects/project%20%2F%201/members/consultant%40example.com',
-      expect.objectContaining({ method: 'DELETE', signal: undefined }),
+      expect.objectContaining({ method: 'DELETE', signal: expect.any(AbortSignal) }),
     ])
   })
 
@@ -186,5 +198,33 @@ describe('authenticated API requests', () => {
     const init = fetchMock.mock.calls[0][1]
     expect(new Headers(init?.headers).get('X-Request-ID')).toMatch(/^web_[a-f0-9]+$/)
     expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer signed-access-token')
+  })
+
+  it('converts the client deadline into a stable timeout error', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(abortableFetch)
+
+      const request = listProjects()
+      const assertion = expect(request).rejects.toMatchObject({
+        message: '请求超时，当前数据未改变，请重试。',
+        code: 'REQUEST_TIMEOUT',
+      })
+      await vi.advanceTimersByTimeAsync(API_REQUEST_TIMEOUT_MS)
+
+      await assertion
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('preserves an explicit user cancellation as AbortError', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(abortableFetch)
+    const controller = new AbortController()
+    const request = listProjects(controller.signal)
+
+    controller.abort()
+
+    await expect(request).rejects.toMatchObject({ name: 'AbortError' })
   })
 })

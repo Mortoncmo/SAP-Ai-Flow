@@ -24,6 +24,10 @@ services:
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-10}
+      LLM_TOTAL_TIMEOUT_SECONDS: ${LLM_TOTAL_TIMEOUT_SECONDS:-35}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
+      LLM_RETRY_BACKOFF_SECONDS: ${LLM_RETRY_BACKOFF_SECONDS:-0.25}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-sap_blueprint}:${POSTGRES_PASSWORD:-sap_blueprint_dev}@postgres:5432/${POSTGRES_DB:-sap_blueprint}
       DATABASE_AUTO_CREATE: "false"
       KNOWLEDGE_ROOT: /app/SAP_Knowledge
@@ -61,6 +65,8 @@ services:
       context: ..
       dockerfile: apps/web/Dockerfile
       args:
+        VITE_API_TIMEOUT_MS: ${VITE_API_TIMEOUT_MS:-40000}
+        VITE_EXPORT_TIMEOUT_MS: ${VITE_EXPORT_TIMEOUT_MS:-44000}
         VITE_OIDC_AUTHORITY: ${VITE_OIDC_AUTHORITY:-}
         VITE_OIDC_CLIENT_ID: ${VITE_OIDC_CLIENT_ID:-}
         VITE_OIDC_REDIRECT_URI: ${VITE_OIDC_REDIRECT_URI:-}

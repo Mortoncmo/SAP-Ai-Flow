@@ -3,6 +3,7 @@ async page => {
   const viewerUserId = 'browser-smoke-viewer'
   const projectName = '浏览器自动验收项目'
   const processName = 'P2P 浏览器验收流程'
+  const managedEnvironment = page.url().includes('browserSmokeManaged=1')
   let stage = 'initializing'
   const consoleErrors = []
   const pageErrors = []
@@ -92,6 +93,7 @@ async page => {
   try {
     // Local demo regression: adding swimlanes must never add process nodes.
     stage = 'loading local demo'
+    await page.evaluate(() => localStorage.removeItem('sap-ai-flow-state'))
     await page.reload({ waitUntil: 'domcontentloaded' })
     await page.locator('.canvas-region').waitFor()
 
@@ -101,6 +103,43 @@ async page => {
       initialNodes === 7 && initialLanes === 5,
       `expected 7 business nodes and 5 lanes, got ${initialNodes}/${initialLanes}`,
     )
+
+    stage = 'testing local history and recovery'
+    const storedVersion = () => page.evaluate(() => {
+      const persisted = JSON.parse(localStorage.getItem('sap-ai-flow-state') || '{}')
+      return persisted.state?.graph?.version
+    })
+    const initialVersion = (await storedVersion()) ?? 0
+    const verticalButton = page.locator('.segmented button').filter({ hasText: '\u7eb5\u5411' })
+    const horizontalButton = page.locator('.segmented button').filter({ hasText: '\u6a2a\u5411' })
+    assert(await horizontalButton.getAttribute('class') === 'is-active', 'sample graph is not horizontal')
+    await verticalButton.click()
+    await page.getByRole('button', { name: '\u81ea\u52a8\u5e03\u5c40' }).click()
+    await page.waitForFunction(expected => {
+      const persisted = JSON.parse(localStorage.getItem('sap-ai-flow-state') || '{}')
+      return persisted.state?.graph?.version === expected
+    }, initialVersion + 2)
+
+    await page.getByRole('button', { name: '\u64a4\u9500' }).click()
+    assert(await storedVersion() === initialVersion + 1, 'first undo did not restore the direction change')
+    await page.getByRole('button', { name: '\u64a4\u9500' }).click()
+    assert(await storedVersion() === initialVersion, 'second undo did not restore the initial graph')
+    assert(await horizontalButton.getAttribute('class') === 'is-active', 'undo did not restore horizontal layout')
+
+    await page.getByRole('button', { name: '\u91cd\u505a' }).click()
+    assert(await storedVersion() === initialVersion + 1, 'first redo did not restore the direction change')
+    await page.getByRole('button', { name: '\u91cd\u505a' }).click()
+    assert(await storedVersion() === initialVersion + 2, 'second redo did not restore auto layout')
+    assert(await verticalButton.getAttribute('class') === 'is-active', 'redo did not restore vertical layout')
+
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.locator('.canvas-region').waitFor()
+    assert(await verticalButton.getAttribute('class') === 'is-active', 'reload did not recover the local graph')
+    assert(await storedVersion() === initialVersion + 2, 'reload lost the recovered graph version')
+    assert(await page.locator('.react-flow__node-business').count() === 7, 'reload lost process nodes')
+    assert(await page.locator('.lane-editor__name').count() === 5, 'reload lost swimlanes')
+    await horizontalButton.click()
+    assert(await horizontalButton.getAttribute('class') === 'is-active', 'failed to restore horizontal layout')
 
     await page.locator('.lane-manager__heading button').click()
     const buttonNodes = await page.locator('.react-flow__node-business').count()
@@ -128,6 +167,29 @@ async page => {
     )
     const apiRoot = laneResponse.url().match(/^https?:\/\/[^/]+/)?.[0]
     assert(apiRoot, `could not determine API origin from ${laneResponse.url()}`)
+
+    stage = 'checking local patch P95 performance'
+    const localPatchDurations = []
+    for (let index = 0; index < 20; index += 1) {
+      const startedAt = Date.now()
+      const response = await page.request.post(`${apiRoot}/api/v1/flowcharts/modify`, {
+        headers: { 'X-User-ID': adminUserId },
+        data: {
+          request_id: `browser_performance_${index}`,
+          current_graph: lanePayload.graph,
+          instruction: '\u7ed9\u53d1\u7968\u6821\u9a8c\u589e\u52a0\u6587\u4ef6\u56fe\u6807',
+          locale: 'zh-CN',
+        },
+      })
+      assert(response.ok(), `local patch performance request returned ${response.status()}`)
+      localPatchDurations.push(Date.now() - startedAt)
+    }
+    const sortedDurations = [...localPatchDurations].sort((left, right) => left - right)
+    const localPatchP95Ms = sortedDurations[Math.ceil(sortedDurations.length * 0.95) - 1]
+    assert(
+      localPatchP95Ms < 1_000,
+      `local patch P95 exceeded 1000 ms: ${localPatchP95Ms} (${localPatchDurations.join(',')})`,
+    )
     stage = 'applying natural-language swimlanes in the UI'
     await page.locator('.command-dock__status').filter({ hasText: '\u589e\u52a0\u6cf3\u9053' }).waitFor()
 
@@ -340,18 +402,133 @@ async page => {
     const docx = await downloadBlueprint('\u5bfc\u51fa Word \u84dd\u56fe', '.docx')
     assert(docx.prefix[0] === 80 && docx.prefix[1] === 75, 'Word export is not a valid ZIP/DOCX payload')
 
-    // Persist a modification, publish it, create a new draft, and round-trip through history.
-    stage = 'testing persisted release lifecycle'
+    // A timed-out request must leave the graph unchanged and preserve the command for retry.
+    stage = 'testing request timeout recovery'
     const revisionSelect = page.locator('select[aria-label="\u4fee\u8ba2"]')
     const initialRevision = Number(await revisionSelect.inputValue())
     const lifecycleNodeCount = await page.locator('.react-flow__node-business').count()
-    const modifyResponsePromise = page.waitForResponse(response =>
-      response.url().endsWith(`/api/v1/processes/${fixture.processId}/modify`)
-      && response.request().method() === 'POST',
-    )
-    await page.locator('.command-dock textarea').fill('\u5728\u5f00\u59cb\u540e\u589e\u52a0\u6d4f\u89c8\u5668\u9a8c\u6536\u5ba1\u6279')
-    await page.locator('.command-dock button[type=submit]').click()
-    const modifyResponse = await modifyResponsePromise
+    const lifecycleCommand = '\u5728\u5f00\u59cb\u540e\u589e\u52a0\u6d4f\u89c8\u5668\u9a8c\u6536\u5ba1\u6279'
+    let modifyResponse
+    if (managedEnvironment) {
+      stage = 'testing explicit request cancellation'
+      let finishCancelledRoute
+      const cancelledRouteFinished = new Promise(resolve => {
+        finishCancelledRoute = resolve
+      })
+      await page.route(
+        `${fixture.apiRoot}/api/v1/processes/${fixture.processId}/modify`,
+        async route => {
+          try {
+            await new Promise(resolve => setTimeout(resolve, 3_500))
+            await route.continue()
+          } catch {
+            // The explicit cancel button aborts this intercepted request.
+          } finally {
+            finishCancelledRoute()
+          }
+        },
+        { times: 1 },
+      )
+      const cancelCommand = '\u5728\u5f00\u59cb\u540e\u589e\u52a0\u53d6\u6d88\u6d4b\u8bd5\u8282\u70b9'
+      await page.locator('.command-dock textarea').fill(cancelCommand)
+      await page.locator('.command-dock button[type=submit]').click()
+      await page.getByRole('button', { name: '\u53d6\u6d88' }).click()
+      await page.locator('.command-dock__status').filter({ hasText: '\u5df2\u53d6\u6d88\u672c\u6b21\u4fee\u6539' }).waitFor()
+      assert(await revisionSelect.inputValue() === String(initialRevision), 'cancel changed the revision')
+      assert(
+        await page.locator('.react-flow__node-business').count() === lifecycleNodeCount,
+        'cancel changed the graph',
+      )
+      assert(
+        await page.locator('.command-dock textarea').inputValue() === cancelCommand,
+        'cancel cleared the original command',
+      )
+      await cancelledRouteFinished
+
+      stage = 'testing revision conflict recovery'
+      await page.route(
+        `${fixture.apiRoot}/api/v1/processes/${fixture.processId}/modify`,
+        route => route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            error: {
+              code: 'REVISION_CONFLICT',
+              message: '\u6d41\u7a0b\u5df2\u88ab\u66f4\u65b0\uff0c\u8bf7\u5237\u65b0\u540e\u91cd\u8bd5\u3002',
+            },
+          }),
+        }),
+        { times: 1 },
+      )
+      const conflictCommand = '\u5728\u5f00\u59cb\u540e\u589e\u52a0\u51b2\u7a81\u6d4b\u8bd5\u8282\u70b9'
+      await page.locator('.command-dock textarea').fill(conflictCommand)
+      await page.locator('.command-dock button[type=submit]').click()
+      await page.locator('.command-dock__error').filter({ hasText: '\u5bfc\u51fa\u5f53\u524d JSON \u5907\u4efd' }).waitFor()
+      assert(await revisionSelect.inputValue() === String(initialRevision), 'conflict changed the revision')
+      assert(
+        await page.locator('.react-flow__node-business').count() === lifecycleNodeCount,
+        'conflict changed the graph',
+      )
+      assert(
+        await page.locator('.command-dock textarea').inputValue() === conflictCommand,
+        'conflict cleared the retry command',
+      )
+
+      let finishDelayedRoute
+      const delayedRouteFinished = new Promise(resolve => {
+        finishDelayedRoute = resolve
+      })
+      await page.route(
+        `${fixture.apiRoot}/api/v1/processes/${fixture.processId}/modify`,
+        async route => {
+          try {
+            await new Promise(resolve => setTimeout(resolve, 3_500))
+            await route.continue()
+          } catch {
+            // The browser aborts this intercepted request when its client deadline expires.
+          } finally {
+            finishDelayedRoute()
+          }
+        },
+        { times: 1 },
+      )
+      await page.locator('.command-dock textarea').fill(lifecycleCommand)
+      await page.locator('.command-dock button[type=submit]').click()
+      await page.locator('.command-dock__error').filter({ hasText: '\u8bf7\u6c42\u8d85\u65f6' }).waitFor({ timeout: 5_000 })
+      assert(await revisionSelect.inputValue() === String(initialRevision), 'timeout changed the revision')
+      assert(
+        await page.locator('.react-flow__node-business').count() === lifecycleNodeCount,
+        'timeout changed the graph',
+      )
+      assert(
+        await page.locator('.command-dock textarea').inputValue() === lifecycleCommand,
+        'timeout cleared the retry command',
+      )
+      assert(await page.locator('.command-dock button[type=submit]').isEnabled(), 'retry is disabled after timeout')
+
+      stage = 'retrying after request timeout'
+      const retryStartedAt = Date.now()
+      const retryResponsePromise = page.waitForResponse(response =>
+        response.url().endsWith(`/api/v1/processes/${fixture.processId}/modify`)
+        && response.request().method() === 'POST',
+      )
+      await page.locator('.command-dock button[type=submit]').click()
+      modifyResponse = await retryResponsePromise
+      assert(modifyResponse.ok(), `retry returned ${modifyResponse.status()}`)
+      assert(Date.now() - retryStartedAt < 1_000, 'local persisted retry exceeded 1000 ms')
+      await delayedRouteFinished
+    } else {
+      await page.locator('.command-dock textarea').fill(lifecycleCommand)
+      const modifyResponsePromise = page.waitForResponse(response =>
+        response.url().endsWith(`/api/v1/processes/${fixture.processId}/modify`)
+        && response.request().method() === 'POST',
+      )
+      await page.locator('.command-dock button[type=submit]').click()
+      modifyResponse = await modifyResponsePromise
+    }
+
+    // Publish the successful modification, create a new draft, and round-trip through history.
+    stage = 'testing persisted release lifecycle'
     assert(modifyResponse.ok(), `persisted modify returned ${modifyResponse.status()}`)
     const modifyPayload = await modifyResponse.json()
     const publishedRevision = initialRevision + 1

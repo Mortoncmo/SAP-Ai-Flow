@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import httpx
@@ -27,13 +28,19 @@ GAP 只能输出 candidate，不得输出 confirmed、resolved 或 rejected。
 class DeepSeekProvider:
     external = True
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         if not settings.deepseek_api_key:
             raise ProviderError(
                 "PROVIDER_NOT_CONFIGURED",
                 "使用 DeepSeek Provider 前必须配置 DEEPSEEK_API_KEY。",
             )
         self.settings = settings
+        self.transport = transport
 
     async def generate_patch(
         self,
@@ -52,51 +59,110 @@ class DeepSeekProvider:
         )
         attempts = 0
         last_error = ""
+        last_failure = "invalid"
         max_attempts = self.settings.llm_max_retries + 1
 
-        async with httpx.AsyncClient(timeout=self.settings.llm_timeout_seconds) as client:
-            for attempts in range(1, max_attempts + 1):
-                try:
-                    response = await client.post(
-                        f"{self.settings.deepseek_base_url.rstrip('/')}/chat/completions",
-                        headers={"Authorization": f"Bearer {self.settings.deepseek_api_key}"},
-                        json={
-                            "model": self.settings.deepseek_model,
-                            "response_format": {"type": "json_object"},
-                            "temperature": 0.1,
-                            "messages": [
-                                {"role": "system", "content": SYSTEM_PROMPT},
-                                {
-                                    "role": "user",
-                                    "content": json.dumps(user_payload, ensure_ascii=False),
+        try:
+            async with asyncio.timeout(self.settings.llm_total_timeout_seconds):
+                async with httpx.AsyncClient(
+                    timeout=self.settings.llm_timeout_seconds,
+                    transport=self.transport,
+                ) as client:
+                    for attempts in range(1, max_attempts + 1):
+                        try:
+                            response = await client.post(
+                                f"{self.settings.deepseek_base_url.rstrip('/')}/chat/completions",
+                                headers={
+                                    "Authorization": f"Bearer {self.settings.deepseek_api_key}"
                                 },
-                            ],
-                        },
-                    )
-                    if response.status_code in {401, 403}:
-                        raise ProviderError(
-                            "PROVIDER_AUTH_FAILED",
-                            "DeepSeek 认证失败，请检查 API Key。",
-                        )
-                    if response.status_code == 429:
-                        raise ProviderError("PROVIDER_RATE_LIMITED", "DeepSeek 请求已被限流。")
-                    response.raise_for_status()
-                    content = response.json()["choices"][0]["message"]["content"]
-                    patch = LLMPatch.model_validate_json(content)
-                    return ProviderResult(
-                        patch=patch,
-                        provider="deepseek",
-                        model=self.settings.deepseek_model,
-                        attempts=attempts,
-                    )
-                except ProviderError:
-                    raise
-                except (httpx.HTTPError, KeyError, TypeError, json.JSONDecodeError, ValidationError) as exc:
-                    last_error = type(exc).__name__
+                                json={
+                                    "model": self.settings.deepseek_model,
+                                    "response_format": {"type": "json_object"},
+                                    "temperature": 0.1,
+                                    "messages": [
+                                        {"role": "system", "content": SYSTEM_PROMPT},
+                                        {
+                                            "role": "user",
+                                            "content": json.dumps(
+                                                user_payload, ensure_ascii=False
+                                            ),
+                                        },
+                                    ],
+                                },
+                            )
+                            if response.status_code in {401, 403}:
+                                raise ProviderError(
+                                    "PROVIDER_AUTH_FAILED",
+                                    "DeepSeek 认证失败，请检查 API Key。",
+                                )
+                            if response.status_code == 429:
+                                last_failure = "rate_limit"
+                                last_error = "HTTP_429"
+                            elif response.status_code >= 500:
+                                last_failure = "unavailable"
+                                last_error = f"HTTP_{response.status_code}"
+                            elif response.status_code >= 400:
+                                raise ProviderError(
+                                    "PROVIDER_REQUEST_REJECTED",
+                                    "DeepSeek 拒绝了当前请求，请检查模型和接口配置。",
+                                    details={"status_code": response.status_code},
+                                )
+                            else:
+                                content = response.json()["choices"][0]["message"][
+                                    "content"
+                                ]
+                                patch = LLMPatch.model_validate_json(content)
+                                return ProviderResult(
+                                    patch=patch,
+                                    provider="deepseek",
+                                    model=self.settings.deepseek_model,
+                                    attempts=attempts,
+                                )
+                        except ProviderError:
+                            raise
+                        except httpx.TimeoutException as exc:
+                            last_failure = "timeout"
+                            last_error = type(exc).__name__
+                        except httpx.TransportError as exc:
+                            last_failure = "unavailable"
+                            last_error = type(exc).__name__
+                        except (KeyError, TypeError, json.JSONDecodeError, ValidationError) as exc:
+                            last_failure = "invalid"
+                            last_error = type(exc).__name__
 
+                        if attempts < max_attempts:
+                            await asyncio.sleep(
+                                self.settings.llm_retry_backoff_seconds
+                                * (2 ** (attempts - 1))
+                            )
+        except TimeoutError as exc:
+            raise ProviderError(
+                "PROVIDER_TIMEOUT",
+                "模型服务响应超时，当前流程未发生更改，请重试。",
+                details={"attempts": attempts},
+            ) from exc
+
+        error_code, message = {
+            "timeout": (
+                "PROVIDER_TIMEOUT",
+                "模型服务响应超时，当前流程未发生更改，请重试。",
+            ),
+            "rate_limit": (
+                "PROVIDER_RATE_LIMITED",
+                "模型服务请求已被限流，请稍后重试。",
+            ),
+            "unavailable": (
+                "PROVIDER_UNAVAILABLE",
+                "模型服务暂时不可用，当前流程未发生更改，请稍后重试。",
+            ),
+            "invalid": (
+                "MODEL_OUTPUT_INVALID",
+                "DeepSeek 未返回可用的结构化 Patch。",
+            ),
+        }[last_failure]
         raise ProviderError(
-            "MODEL_OUTPUT_INVALID",
-            "DeepSeek 未返回可用的结构化 Patch。",
+            error_code,
+            message,
             details={"attempts": attempts, "reason": last_error},
         )
 
