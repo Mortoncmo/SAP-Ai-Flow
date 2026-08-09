@@ -33,6 +33,27 @@ LLM_CACHE_MAX_ENTRIES=128
 
 若怀疑短期结果复用影响排障，可先把任一缓存配置设为 `0` 并滚动重启 API，再使用同一修订重试；不要直接修改流程修订或缓存代码绕过证据和事务校验。恢复配置前记录 `request_id`、`cache_status`、`model_calls`、Provider/模型和流程修订，禁止记录 Prompt、完整图或客户业务数据。
 
+## 外部模型与 PostgreSQL 容量验收
+
+正式容量测试会创建一个项目和每样本一个独立流程，不自动删除数据，并可能产生付费模型调用。运行前必须确认维护窗口、Provider 配额/费用、目标数据库备份空间和测试数据处置方式；使用具备 `project_admin` 权限的受控 OIDC Token，不得使用开发身份头测试远程环境。
+
+```powershell
+$env:SAP_FLOW_ACCESS_TOKEN = '<injected-secret>'
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\run_capacity_test.ps1 `
+  -BaseUrl https://sap-flow.example.com `
+  -AllowDataCreation `
+  -EnableExternalModel `
+  -RequireExternalProvider `
+  -RequirePostgreSQL
+```
+
+默认运行 1、2、4、8 四档并发，每档 20 个独立样本；默认门槛为错误率不高于 1%、P95 不高于 8 秒、P99 不高于 15 秒。需要调整时显式传入 `-ConcurrencyLevels`、`-SamplesPerLevel`、`-MaxErrorRatePercent`、`-MaxP95Ms` 和 `-MaxP99Ms`，并在验收记录中说明依据，不能为了通过而事后放宽门槛。
+
+脚本先读取 `/health/ready` 的 `database_backend`，`-RequirePostgreSQL` 会在创建测试项目之前拒绝 SQLite；`-RequireExternalProvider` 会把本地回退或没有产生外部模型调用的成功响应记为失败。报告保存每档错误率、P50/P95/P99、Provider/模型、调用次数和缓存状态，不保存 Token、Prompt、指令或完整图。归档时至少保留 JSON、CSV、Git 提交 SHA、目标部署版本、Provider 配额和运行窗口；只有 `database_backend=postgresql`、两个外部模型布尔标志为 `true` 且所有并发级别通过，才可关闭 Week 11 容量门槛。
+
+容量场景按流程隔离，因此适合测量外部模型与 PostgreSQL 的并发和长尾，不代表真实业务缓存命中率。缓存命中率必须结合目标工作负载和应用响应指标单独评估，再决定 TTL/容量、分布式缓存或单实例限制。
+
 ## 异步导出保留与恢复
 
 Markdown/Word 导出通过持久化 `export_job` 记录状态和临时文件内容。部署时显式配置：

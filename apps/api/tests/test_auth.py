@@ -233,6 +233,7 @@ def test_readiness_requires_oidc_configuration_in_production():
         "provider": "local",
         "authentication": "oidc",
         "database": "ready",
+        "database_backend": "sqlite",
     }
 
 

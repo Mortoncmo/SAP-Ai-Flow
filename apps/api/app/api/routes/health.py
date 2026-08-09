@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, Response
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import Settings, get_settings
@@ -30,6 +31,7 @@ def ready(
         "provider": settings.agent_provider,
         "authentication": "development" if settings.app_env == "development" else "oidc",
         "database": "ready" if database_available else "unavailable",
+        "database_backend": make_url(settings.database_url).get_backend_name(),
     }
 
 

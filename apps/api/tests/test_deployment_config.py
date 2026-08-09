@@ -90,3 +90,23 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "ignore-unfixed: true" in workflow
     assert 'exit-code: "1"' in workflow
     assert "down --volumes --remove-orphans" in workflow
+
+
+def test_capacity_harness_has_release_metrics_and_safety_guards():
+    script = (ROOT / "scripts" / "run_capacity_test.ps1").read_text(encoding="utf-8")
+
+    assert "AllowDataCreation" in script
+    assert "A Bearer token is required for non-loopback targets" in script
+    assert "without credentials, query, or fragment" in script
+    assert "EnableExternalModel" in script
+    assert "RequireExternalProvider" in script
+    assert "RequirePostgreSQL" in script
+    assert "database_backend" in script
+    assert "MaxErrorRatePercent" in script
+    assert "MaxP95Ms" in script
+    assert "MaxP99Ms" in script
+    assert "model_calls" in script
+    assert "reported_model_calls" in script
+    assert "cache_status" in script
+    assert "capacity-report-" in script
+    assert "capacity-samples-" in script

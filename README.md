@@ -24,6 +24,7 @@ SAP AI Flow 是一个面向 SAP 业务流程建模的对话式流程图工具。
 - LangGraph 请求级条件编排：泳道、连线、图标和布局等纯结构修改跳过知识检索；SAP 专业修改进入检索、证据、Provider、原子 Patch 和待确认分支，文档导出执行待确认预检。
 - 开发环境身份头与生产 OIDC/JWKS Bearer JWT 验证边界。
 - FastAPI OpenAPI 文档、pytest 和 Vitest 测试。
+- 可配置的 API 容量测试脚本，按并发级别输出错误率、P50/P95/P99、模型调用数、缓存状态和数据库后端证据。
 - Docker Compose 和 GitHub Actions 基线。
 
 完整范围、协议和 12 周实施计划见 [IMPLEMENTATION.md](./IMPLEMENTATION.md)。
@@ -131,6 +132,35 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 脚本读取 `examples/mm-p2p-acceptance-demo.json`，显式按 UTF-8 发送和读取中文 JSON，并校验 7 个节点、6 条连线、5 条泳道、连线标签和发布状态。随后创建 Markdown、DOCX 两个异步任务，轮询完成并把两个 `export_id` 写入 `acceptance-summary.json`。三个产物默认写入 `output/acceptance-demo`；该目录已忽略，不会把运行数据提交到仓库。
 
 本地开发默认使用 `-UserId local-user`。对启用 OIDC 的部署环境执行时，通过受控 Secret 注入设置 `SAP_FLOW_ACCESS_TOKEN`，或显式传入 `-AccessToken`；令牌只进入 `Authorization` 请求头，不写入验收摘要。不要把令牌明文写入命令历史。
+
+## 容量测试
+
+`scripts/run_capacity_test.ps1` 为每个样本创建独立流程并执行一次持久化修改，避免把同一流程的预期修订冲突误算成模型容量。脚本必须显式传入 `-AllowDataCreation`；默认测试 1、2、4、8 四档并发，每档 20 个样本，因此会创建 80 个流程。启用外部模型时最多产生同等数量的付费调用，运行前必须确认测试窗口、配额和费用。
+
+本地只验证脚本和阈值机制，不构成生产容量结论：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\run_capacity_test.ps1 `
+  -BaseUrl http://127.0.0.1:8000 `
+  -AllowDataCreation `
+  -SamplesPerLevel 5
+```
+
+目标环境正式验收必须使用具备 `project_admin` 权限的 OIDC Token，并同时要求真实外部 Provider 和 PostgreSQL：
+
+```powershell
+$env:SAP_FLOW_ACCESS_TOKEN = '<injected-secret>'
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\run_capacity_test.ps1 `
+  -BaseUrl https://sap-flow.example.com `
+  -AllowDataCreation `
+  -EnableExternalModel `
+  -RequireExternalProvider `
+  -RequirePostgreSQL
+```
+
+默认门槛为错误率不高于 1%、P95 不高于 8 秒、P99 不高于 15 秒，任一并发级别失败时脚本在保存报告后返回非零。JSON 汇总和 CSV 样本默认写入 `output/capacity-test`，包含测试项目 ID、`database_backend`、Provider/模型、成功响应报告的 `model_calls` 和 `cache_status`，不包含 Token、Prompt、指令或完整图。失败响应可能已消耗上游调用，因此汇总字段明确命名为 `reported_model_calls`，不能作为账单统计。只有报告同时满足 `database_backend=postgresql`、`external_model_enabled=true`、`external_provider_required=true` 且所有级别 `passed=true`，才能作为 Week 11 容量验收证据；仍需连同目标部署规格、Provider 配额和运行时间归档。当前独立流程场景用于容量测量，不代表真实业务缓存命中率。
 
 ## 身份认证
 

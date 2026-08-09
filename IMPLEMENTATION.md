@@ -1,6 +1,6 @@
 # SAP Blueprint AI Agent 实施规格
 
-> 文档状态：整合实施与模型调用缓存验收基线 3.5
+> 文档状态：整合实施与容量验收工具基线 3.6
 >
 > 实施状态校准：2026-08-09（以当前代码与自动化测试为准）
 >
@@ -166,6 +166,7 @@
 - GitHub Actions 独立 `deploy` 验收作业已在干净 Ubuntu runner 构建 Compose 镜像、启动 PostgreSQL/API/Web、校验数据库 readiness 和 Alembic `20260809_0005 (head)`，再执行 `pg_dump`、恢复到独立数据库并核对迁移版本。
 - 前后端自动化测试基线，以及迁移、导出结构和典型项目闭环的回归覆盖。
 - 可自行分配端口并启动当前 API、Web 和隔离 SQLite 数据库的 Playwright CLI smoke；覆盖本地撤销/重做/自动布局/刷新恢复、泳道不误增节点、成员 CRUD、外部模型二次确认与审计、取消/超时/修订冲突恢复、本地 Patch P95、持久化修改/发布/历史回看/新草稿、管理员/查看者权限、异步 Markdown/Word 下载和三种视口。
+- 可配置 API 容量测试脚本：每个样本使用独立流程，按并发级别输出错误率、P50/P95/P99、Provider/模型、`model_calls`、`cache_status` 和 `database_backend`；远程目标强制 Bearer Token，可要求真实外部 Provider 与 PostgreSQL，并在阈值失败后保留机器可读报告再返回非零。
 - 版本化 MM/P2P 验收场景和 PowerShell API 演示脚本；可重复完成项目创建、Agent 建图、连线修改、发布、创建两个持久化导出任务并下载双格式蓝图，输出包含两个 `export_id` 的验收摘要。
 
 ### 3.2 尚未完成
@@ -200,7 +201,7 @@
 
 ### 3.4 本轮验证记录（2026-08-09）
 
-- 后端 `ruff check .` 通过，pytest 97 项通过，包含 LangGraph 纯结构/SAP 专业意图路由、证据不足与待确认分支、文档导出预检，以及知识服务强制不可用时持久化泳道/连线/图标修改仍连续保存且不增节点；同时覆盖浏览器 smoke CORS 启动配置、数据库 readiness 安全失败、Docker 构建上下文与 Compose 暴露面静态红线、Compose 列表型环境变量加载和 PostgreSQL 部署工作流断言、13 个检索和 8 个 GAP 固定评估案例、跨流程/跨 Release GAP 规则隔离、版本化验收场景完整 API 闭环、异步导出持久化/下载/过期/失败/权限与迁移、`update_edge` 有效/非法/重复/原子回滚、自然语言连线增改删及重复/缺失/歧义错误，以及 DeepSeek 时限/重试、角色门禁、发布 GAP 审计、JWT、证据门禁、外部模型策略、日志脱敏、数据库事务回滚和依赖/导出失败保图。
+- 后端 `ruff check .` 通过，pytest 98 项通过，包含 LangGraph 纯结构/SAP 专业意图路由、证据不足与待确认分支、文档导出预检，以及知识服务强制不可用时持久化泳道/连线/图标修改仍连续保存且不增节点；同时覆盖浏览器 smoke CORS 启动配置、数据库 readiness 安全失败和后端标识、容量脚本安全/指标契约、Docker 构建上下文与 Compose 暴露面静态红线、Compose 列表型环境变量加载和 PostgreSQL 部署工作流断言、13 个检索和 8 个 GAP 固定评估案例、跨流程/跨 Release GAP 规则隔离、版本化验收场景完整 API 闭环、异步导出持久化/下载/过期/失败/权限与迁移、`update_edge` 有效/非法/重复/原子回滚、自然语言连线增改删及重复/缺失/歧义错误，以及 DeepSeek 时限/重试、角色门禁、发布 GAP 审计、JWT、证据门禁、外部模型策略、日志脱敏、数据库事务回滚和依赖/导出失败保图。
 - 依赖/导出失败回归通过：知识服务和 Provider 故障分别返回稳定错误；DOCX 渲染故障返回通用 500；三类失败后当前流程仍为修订 0，修订表与 ChangeLog 无新增记录。
 - SQLite 故障注入在 `ChangeLog` INSERT 阶段抛出 `OperationalError`，验证 API 返回安全的 `DATABASE_WRITE_FAILED`（503）并保留请求号；重新打开 Session 后流程修订号、修订表和 ChangeLog 均无部分更新。
 - 模型缓存专项回归覆盖 TTL、LRU、8 个相同并发请求只调用一次 Provider、失败不缓存、最后等待者取消后终止上游任务、跨项目/流程隔离和命中后重新执行证据校验；数据库故障注入还验证首次外部调用成功但事务回滚后，相同重试从缓存恢复，Provider 总调用次数仍为 1，最终只保存 1 个修订和 1 条 ChangeLog。
@@ -211,6 +212,7 @@
 - OIDC 本切片浏览器验收覆盖未配置兼容模式和“已配置但未登录”模式：登录入口可见，项目选择与新建项目被禁用，390 x 844 和 1024 x 768 页面/页头 `scrollWidth` 均等于视口宽度，登录图标宽度稳定为 35 px，控制台无 error。真实 IdP 跳转与回调仍待目标环境联调。
 - `pip-audit` 在升级 Pillow 12.3.0 后无可修复漏洞；ChromaDB `PYSEC-2026-311` 因项目未暴露 Chroma HTTP API 而按 `SECURITY.md` 限定例外并设 2026-09-09 复核日。`npm audit --omit=dev` 为 0 漏洞，生产源码/前端构建秘密扫描通过。
 - `scripts/browser_smoke.ps1` 与 `scripts/browser_smoke.js` 已固化本地历史/恢复、泳道、连线双入口增改删、成员 CRUD、外部模型策略、取消/超时/冲突恢复、本地 P95、持久化发布生命周期、管理员/查看者权限、异步任务 `202`/`export_id`/`pending` 与实际下载，以及三视口回归；还需在真实外部模型/PostgreSQL 环境扩展并发、长尾与容量测试。
+- `scripts/run_capacity_test.ps1` 已在隔离 SQLite/Local Provider 环境完成 1/2/4 并发、每档 5 样本的脚本验收，三档错误率均为 0，P95 分别为 430/90/187 ms；1 ms P95/P99 门槛会正确保存 `passed=false` 报告并返回非零。数据创建确认、远程无 Token 拒绝、SQLite 被 `-RequirePostgreSQL` 拒绝且不进入测试数据创建的门禁均已实跑。该结果只证明工具可用，不是外部模型/PostgreSQL 容量结论。
 - `scripts/run_acceptance_demo.ps1` 已在独立 FastAPI 进程和隔离 SQLite 数据库中实跑通过，发布修订 2 / Release 1，创建两个持久化 `export_id`，并生成内容有效的 Markdown、DOCX 和 JSON 摘要；Windows PowerShell 5 的中文请求/响应已使用显式 UTF-8 字节和流解码验证。
 - 当前环境没有 LibreOffice/`soffice`，DOCX 尚未完成 PNG 级视觉渲染；当前环境没有 Docker CLI，Compose 尚未完成真实 build/up 验收。
 - 缓存切片 GitHub Actions 运行 `31309320723` 的 API、Web 和 `deploy` 三个作业全部通过；`deploy` 作业重新生成并上传 API/Web CycloneDX SBOM，通过两个镜像的可修复 Critical 漏洞门禁，并完成镜像构建、干净 Compose 启动、数据库 readiness、Alembic head、`pg_dump` 和独立数据库恢复验证。
@@ -981,7 +983,7 @@ V1.0 至少定义以下角色：
 - 所有 AI 生成的专业字段证据覆盖率 100%，无证据字段必须明确待确认。
 - AI 自动确认 GAP 的数量为 0。
 - 固定 MM/P2P 评估集中，知识引用准确率达到发布门槛；门槛由首批顾问标注集确定。
-- 非导出交互 P95 目标小于 8 秒；纯本地 Patch 小于 1 秒。
+- 非导出交互 P95 目标小于 8 秒；目标容量级别的错误率不高于 1%、P99 不高于 15 秒；纯本地 Patch 小于 1 秒。
 - Markdown 与 Word 的节点、GAP 和版本统计一致率 100%。
 
 ## 15. 12 周实施计划
@@ -1111,6 +1113,7 @@ V1.0 至少定义以下角色：
 - [x] 完成 DeepSeek 单次/总时限、瞬时错误分类重试与指数退避，并统一前端/Nginx 截止时间。
 - [x] 完成项目级外部 Provider 短期结果缓存：项目/流程隔离的规范化键、TTL/LRU、并发相同调用合并、失败不缓存、取消传播和命中后重新校验/事务保存；本地规则 Provider 不缓存。
 - [x] 完成本地 Patch P95 及前端取消、超时、409 保图和重试的浏览器故障注入。
+- [x] 固化真实环境容量测试工具、独立流程并发场景、P50/P95/P99/错误率门槛、外部 Provider/PostgreSQL 硬校验和脱敏 JSON/CSV 报告；本地仅完成工具自测。
 - [ ] 完成真实外部模型/PostgreSQL 的并发、长尾和容量测试。
 
 退出标准：编排失败不破坏图和修订；缓存不得跨项目/流程复用，也不得绕过证据、Patch 和事务校验；质量达到第 14.5 节门槛。真实外部模型/PostgreSQL 容量门槛仍待目标环境关闭。
@@ -1179,7 +1182,7 @@ V1.0 至少定义以下角色：
 
 1. 在目标 SSO/OIDC 身份提供方登记 SPA 客户端、回调地址和 API audience，完成真实登录、退出、Token 刷新/过期及部署联调；通用 Authorization Code + PKCE、Bearer Token 注入和应用日志治理已完成。
 2. 完成知识来源/授权顾问审核、正式标注集和生产语义嵌入模型对比；ChromaDB 持久化、离线混合召回和固定自动化评估集已完成。
-3. 在真实外部模型/PostgreSQL 环境完成并发、长尾和容量测试；同时验证多实例下导出任务抢占与陈旧恢复，并决定生产环境采用独立队列/Worker 和对象存储还是限制为单实例低并发部署。
+3. 使用已固化的容量脚本在真实外部模型/PostgreSQL 环境完成并发、长尾和容量测试并归档 JSON/CSV；同时验证多实例下导出任务抢占与陈旧恢复，并决定生产环境采用独立队列/Worker 和对象存储还是限制为单实例低并发部署。
 4. 在具备 LibreOffice 和中文字体的目标环境完成 DOCX 视觉渲染、部署联调和运行维护签字；应用数据库中的导出二进制不得被当作永久交付物存储。
 5. 结合真实外部模型容量和命中率结果调整缓存 TTL/容量，并决定多实例环境是否引入分布式缓存；Python SDK、CLI 和 BPMN 保持后续优先级。
 

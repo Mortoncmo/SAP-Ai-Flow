@@ -34,6 +34,7 @@ def test_readiness_returns_safe_503_when_database_is_unavailable():
         "provider": "local",
         "authentication": "development",
         "database": "unavailable",
+        "database_backend": "sqlite",
     }
     assert "secret-password" not in response.text
 
