@@ -205,7 +205,7 @@
 - `scripts/browser_smoke.ps1` 与 `scripts/browser_smoke.js` 已固化本地历史/恢复、泳道、连线双入口增改删、成员 CRUD、外部模型策略、取消/超时/冲突恢复、本地 P95、持久化发布生命周期、管理员/查看者权限、异步任务 `202`/`export_id`/`pending` 与实际下载，以及三视口回归；还需在真实外部模型/PostgreSQL 环境扩展并发、长尾与容量测试。
 - `scripts/run_acceptance_demo.ps1` 已在独立 FastAPI 进程和隔离 SQLite 数据库中实跑通过，发布修订 2 / Release 1，创建两个持久化 `export_id`，并生成内容有效的 Markdown、DOCX 和 JSON 摘要；Windows PowerShell 5 的中文请求/响应已使用显式 UTF-8 字节和流解码验证。
 - 当前环境没有 LibreOffice/`soffice`，DOCX 尚未完成 PNG 级视觉渲染；当前环境没有 Docker CLI，Compose 尚未完成真实 build/up 验收。
-- GitHub Actions 运行 `31304518020` 的 API、Web 和 `deploy` 三个作业全部通过；`deploy` 作业完成镜像构建、干净 Compose 启动、数据库 readiness、Alembic head、`pg_dump` 和独立数据库恢复验证。
+- GitHub Actions 运行 `31306162985` 的 API、Web 和 `deploy` 三个作业全部通过；`deploy` 作业生成并上传 API/Web CycloneDX SBOM 构件 `9036014334`，通过两个镜像的可修复 Critical 漏洞门禁，并完成镜像构建、干净 Compose 启动、数据库 readiness、Alembic head、`pg_dump` 和独立数据库恢复验证。
 
 ### 3.5 基线迁移原则
 
