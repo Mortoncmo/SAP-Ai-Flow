@@ -20,6 +20,7 @@ SAP AI Flow 是一个面向 SAP 业务流程建模的对话式流程图工具。
 - SAP MM/P2P 元数据、受控知识检索、GAP 候选与人工决策审计。
 - 项目、流程、修订、发布版本、服务端项目成员角色，以及持久化异步 Markdown/Word 蓝图导出。
 - ChromaDB 持久化知识索引、确定性字符 n-gram 向量和精确词法混合召回。
+- LangGraph 请求级条件编排：泳道、连线、图标和布局等纯结构修改跳过知识检索；SAP 专业修改进入检索、证据、Provider、原子 Patch 和待确认分支，文档导出执行待确认预检。
 - 开发环境身份头与生产 OIDC/JWKS Bearer JWT 验证边界。
 - FastAPI OpenAPI 文档、pytest 和 Vitest 测试。
 - Docker Compose 和 GitHub Actions 基线。
@@ -29,7 +30,7 @@ SAP AI Flow 是一个面向 SAP 业务流程建模的对话式流程图工具。
 ## 技术栈
 
 - Web：React 19、TypeScript、Vite、`@xyflow/react`、Dagre、Zustand。
-- API：Python 3.12、FastAPI、Pydantic 2、HTTPX、SQLAlchemy、ChromaDB、PyJWT。
+- API：Python 3.12、FastAPI、Pydantic 2、LangGraph、HTTPX、SQLAlchemy、ChromaDB、PyJWT。
 - 测试：pytest、Vitest；浏览器验收使用 Playwright CLI。
 - 部署：Docker、Docker Compose、Nginx。
 

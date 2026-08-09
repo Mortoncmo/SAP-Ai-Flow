@@ -1,6 +1,6 @@
 # SAP Blueprint AI Agent 实施规格
 
-> 文档状态：整合实施与自动化部署验收基线 3.3
+> 文档状态：整合实施与 Agent 编排验收基线 3.4
 >
 > 实施状态校准：2026-08-09（以当前代码与自动化测试为准）
 >
@@ -34,7 +34,7 @@
 | 新版说明项 | 与当前项目的差异或问题 | 统一实施结论 |
 | --- | --- | --- |
 | React 18 + Ant Design | 当前项目已使用 React 19 和自定义设计体系，整体迁移会扩大回归范围 | 保留 React 19 和现有组件样式；SAP 功能完善期间不迁移 UI 框架 |
-| LangGraph 在早期直接接管流程 | 当前原子 Patch、Provider 和应用服务已能形成稳定闭环，过早编排会增加调试面 | 先稳定 Tool、权限、知识和持久化契约；仅在多分支状态确有需要时引入 LangGraph |
+| LangGraph 在早期直接接管流程 | 当前原子 Patch、Provider 和应用服务已形成稳定闭环，编排层不能重新拥有领域校验、ID 或事务 | Tool、权限、知识和持久化契约稳定后引入 LangGraph；仅编排请求级条件分支，继续复用原子 `LLMPatch`、证据门禁和 Repository 事务 |
 | 模型生成完整 React Flow JSON | 完整替换会破坏永久 ID、布局、泳道、历史和并发控制 | LLM 只生成原子 `LLMPatch`，由服务端校验、分配 ID、执行和保存 |
 | `process_node` 作为图的权威表 | 与当前完整 `GraphDocument` 快照双写时容易不一致 | V1.0 以 `ProcessRevision.graph_json` 为权威；节点表仅在后续跨流程分析需要时作为投影 |
 | 数据库草案只定义项目、流程和节点 | 缺少连线、泳道、编辑修订、发布版本、成员权限和 GAP 决策审计，无法支撑当前完整闭环 | 采用当前 `Project / Process / ProcessRevision / ChangeLog / GapDecision / ProjectMember` 模型；完整图随修订保存，不按新版草案缩减 |
@@ -146,6 +146,8 @@
 - 版本化 Markdown chunk、内容哈希、ChromaDB 持久化集合和离线字符 n-gram 向量/词法混合召回；索引重建会清理陈旧 chunk。
 - 固定知识自动化评估集，覆盖 13 个检索案例和 8 个 GAP 正反例，并设置检索状态、Top-1 来源、证据来源、GAP 规则引用和结果质量门槛。
 - 持久化流程修改会自动检索项目知识，把证据传给 Provider、返回前端并写入 ChangeLog；未知证据引用、无批准证据的 `verified` 元数据和无证据 GAP 会在保存前被拒绝。
+- LangGraph `ProcessAgentOrchestrator` 请求级条件路由：先区分纯画布结构修改与 SAP 专业修改；泳道、连线、图标和布局等纯结构指令跳过知识检索，SAP/T-Code/Fiori/配置/BAdI/Best Practice/GAP 指令进入知识检索、证据不足标记、Provider 策略、Patch 生成、证据校验和待确认分支。
+- LangGraph `DocumentAgentOrchestrator` 导出预检与 Markdown/DOCX 渲染路由：发现未验证 SAP 元数据、无引用 Best Practice 或候选 GAP 时标记 `pending_confirmation`，但不替代发布门禁，也不把导出结果误标为顾问签字版本。
 - 发布前图结构、项目/流程/SAP Context 必填字段、专业元数据证据和 GAP 人工决策审计校验。
 - 前端按服务端 `current_role` 控制查看者、编辑者和审批者能力；查看者可查看和导出，但不能编辑、布局、导入、操作泳道或发布。
 - Zustand 历史记录、撤销、重做和浏览器本地恢复。
@@ -169,7 +171,7 @@
 - 知识库授权审核、顾问正式标注与质量门槛评审、生产语义嵌入模型选型尚未完成；当前已有固定自动化评估集，但 ChromaDB 仍使用离线可重复的字符 n-gram 哈希向量，不宣称具备完整语义 RAG 质量。
 - 具体 SSO/OIDC 身份提供方的客户端注册、真实登录/退出联调和租户级隔离尚未完成；通用 SPA PKCE 与 Bearer Token 接入已完成，`X-User-ID` 仅保留在开发环境。
 - 容器基础镜像和操作系统包 Trivy 扫描、CycloneDX SBOM 和可修复 Critical 门禁已接入部署 CI；未修复发现仍保留在日志/构件中。集中日志采集/保留策略、告警规则和生产日志平台联调尚未完成；应用级请求/异常/审计脱敏与秘密扫描已具备自动化红线测试。
-- LangGraph 编排、Python SDK、CLI 和 BPMN 导出。
+- Python SDK、CLI 和 BPMN 导出。
 - 当前后台导出执行仍依赖 FastAPI 进程内 `BackgroundTasks`，导出二进制暂存应用数据库；尚未引入独立任务队列、Worker 和对象存储，因此不能把当前实现视为高并发、多实例或永久文档存储方案。
 - 当前机器无 Docker CLI，不能提供本机 Compose 实跑证据；镜像 build/up、PostgreSQL readiness、迁移及备份恢复已由 GitHub Ubuntu runner 验收通过，中文字体和 DOCX 排版仍需带 LibreOffice 的目标环境单独验收。
 - 生产备份、恢复、迁移和 readiness 操作已写入 `deploy/OPERATIONS.md`，真实卷归档与恢复演练仍需 Docker 环境。
@@ -189,11 +191,12 @@
 - 当前权限实现已从服务端 `ProjectMemberRecord` 解析项目角色，不再信任客户端 `X-Project-Role`；开发环境缺省身份为 `local-user`，生产环境只接受通过 OIDC/JWKS 校验的 Bearer JWT。前端已具备 SPA PKCE 登录、回调、退出和 Token 注入，具体身份提供方客户端注册及部署联调完成前，仍不能视为完整生产认证方案。
 - 当前知识检索已使用 ChromaDB 持久化索引和向量/词法混合排序；开发环境允许待审核种子并保持待确认标识，生产环境只索引授权且顾问审核通过的语料。固定自动化评估集已完成，顾问正式标注、质量门槛签字和生产语义嵌入模型仍待完成。
 - 当前离线混合检索要求最高候选分数至少达到 0.30，达到门槛后保留同一查询的相关支持证据；PP 生产订单和 SD 退货开票等近邻负例必须返回证据不足。GAP 规则除模块外还必须与流程范围和 SAP Release 一致，禁止跨范围或跨版本套用候选规则。
+- 当前 LangGraph 只编排请求级状态：纯泳道/连线/图标/布局修改不再依赖知识服务，SAP 专业修改保留检索、证据不足、外部模型策略、原子 Patch、证据校验和待确认分支；编排成功后才由现有 Repository 保存修订和 ChangeLog。文档导出增加待确认预检分支，渲染仍复用同一 `BlueprintDocumentModel`。
 - 当前部署配置已具备稳定镜像命名和可重复的 Compose/PostgreSQL 验收作业；远程 `deploy` 作业已验证干净构建、启动、readiness、迁移、备份和恢复。
 
 ### 3.4 本轮验证记录（2026-08-09）
 
-- 后端 `ruff check app tests alembic` 通过，pytest 86 项通过，包含数据库 readiness 安全失败、Docker 构建上下文与 Compose 暴露面静态红线、Compose 列表型环境变量加载和 PostgreSQL 部署工作流断言、13 个检索和 8 个 GAP 固定评估案例、跨流程/跨 Release GAP 规则隔离、版本化验收场景完整 API 闭环、异步导出持久化/下载/过期/失败/权限与迁移、`update_edge` 有效/非法/重复/原子回滚、自然语言连线增改删及重复/缺失/歧义错误，以及 DeepSeek 时限/重试、角色门禁、发布 GAP 审计、JWT、证据门禁、外部模型策略、日志脱敏、数据库事务回滚和依赖/导出失败保图。
+- 后端 `ruff check .` 通过，pytest 91 项通过，包含 LangGraph 纯结构/SAP 专业意图路由、证据不足与待确认分支、文档导出预检，以及知识服务强制不可用时持久化泳道/连线/图标修改仍连续保存且不增节点；同时覆盖浏览器 smoke CORS 启动配置、数据库 readiness 安全失败、Docker 构建上下文与 Compose 暴露面静态红线、Compose 列表型环境变量加载和 PostgreSQL 部署工作流断言、13 个检索和 8 个 GAP 固定评估案例、跨流程/跨 Release GAP 规则隔离、版本化验收场景完整 API 闭环、异步导出持久化/下载/过期/失败/权限与迁移、`update_edge` 有效/非法/重复/原子回滚、自然语言连线增改删及重复/缺失/歧义错误，以及 DeepSeek 时限/重试、角色门禁、发布 GAP 审计、JWT、证据门禁、外部模型策略、日志脱敏、数据库事务回滚和依赖/导出失败保图。
 - 依赖/导出失败回归通过：知识服务和 Provider 故障分别返回稳定错误；DOCX 渲染故障返回通用 500；三类失败后当前流程仍为修订 0，修订表与 ChangeLog 无新增记录。
 - SQLite 故障注入在 `ChangeLog` INSERT 阶段抛出 `OperationalError`，验证 API 返回安全的 `DATABASE_WRITE_FAILED`（503）并保留请求号；重新打开 Session 后流程修订号、修订表和 ChangeLog 均无部分更新。
 - 前端 Vitest 30 项、TypeScript typecheck 和 production build 通过；覆盖异步导出创建、轮询、下载、统一截止时间、显式取消，以及成员 API、项目策略、导出文件名、导出失败错误、OIDC 配置、同源回调、防开放跳转、登录/退出回调和 Bearer Token 请求头。
@@ -228,7 +231,7 @@
 | 主数据库 | PostgreSQL | 项目、流程、修订、发布版本和审计日志 |
 | 数据迁移 | SQLAlchemy 2、Alembic | 禁止手工维护多套 DDL |
 | 向量库 | ChromaDB | V1.0 私有化轻量部署；Milvus 不进入首版 |
-| Agent 编排 | 现有 Provider 接口；Phase 2 引入 LangGraph | 先稳定工具契约，再引入状态路由 |
+| Agent 编排 | LangGraph 1.x、现有 Provider 与应用服务 | 编排请求级条件路由；领域校验、ID、事务和长期状态仍由现有服务负责 |
 | LLM | Local Rule、DeepSeek | OpenAI/Claude 通过新 Provider 扩展，不写入核心逻辑 |
 | 文档 | Markdown 模板、`python-docx` | 同一领域数据生成两种格式 |
 | 测试 | Vitest、Playwright、pytest | 单元、契约、端到端和知识评估 |
@@ -560,16 +563,21 @@ output: file metadata and download reference
 
 这些名称表示职责边界，不要求每个组件都调用一次独立模型。V1.0 优先减少模型调用次数和不确定性。
 
-### 9.2 LangGraph 引入条件
+### 9.2 LangGraph 编排边界与当前实现
 
-Phase 1 延续当前 Provider + Application Service。完成严格 Tool 契约后，在 Phase 2 引入 LangGraph，处理以下有状态分支：
+严格 Tool、证据、权限和持久化契约稳定后，当前已引入 LangGraph 处理两条请求级状态图：
 
-- 指令既需要知识检索又需要修改流程。
-- 检索证据不足，需要返回待确认而不是继续生成。
-- GAP 候选需要顾问确认后才能进入下一状态。
-- 文档导出前需要检查版本、缺失元数据和未确认项。
+1. `ProcessAgentOrchestrator`：意图分类 -> 按需知识检索 -> 证据不足标记 -> Provider 策略 -> 原子 Patch 生成 -> 证据校验与应用 -> 待确认标记。
+2. `DocumentAgentOrchestrator`：导出预检 -> `ready / pending_confirmation` 分支 -> Markdown 或 DOCX 渲染。
 
-LangGraph 状态只保存请求级数据和引用，不保存长期业务事实；长期状态由 PostgreSQL 管理。
+流程编排固定遵守以下边界：
+
+- 纯泳道、连线、图标和布局指令归为 `diagram_edit`，跳过知识检索；包含 SAP、T-Code、Fiori、配置、BAdI、Best Practice、J45、GAP 或增强等专业语义时归为 `sap_change` 并检索知识。
+- 证据不足时仍可执行不依赖专业断言的原子 Patch，但新增专业字段只能保持待确认；现有证据验证器继续拒绝伪造引用、无批准证据的 `verified` 元数据和无证据 GAP。
+- 候选 GAP 或未验证专业元数据进入待确认分支，发布前仍必须通过顾问决策与发布预检。
+- 导出预检只标记交付物是否可作为顾问签字版本，不代替项目权限、修订选择、发布校验或渲染器。
+- LangGraph 状态只保存请求级数据和引用，不保存长期业务事实，不访问数据库表，也不生成永久 ID；长期状态仍由 PostgreSQL 和 Repository 管理。
+- 数据库事务边界不进入状态图：只有编排、Patch 和领域校验全部成功后，应用路由才保存新修订和 ChangeLog。
 
 ### 9.3 Provider 策略
 
@@ -1081,8 +1089,8 @@ V1.0 至少定义以下角色：
 
 ### Week 11：LangGraph、评估与性能
 
-- [ ] 根据已稳定 Tool 契约引入 LangGraph 条件路由。
-- [ ] 完成检索不足、待确认、修改和导出前检查分支。
+- [x] 根据已稳定 Tool 契约引入 LangGraph 请求级条件路由，不改变原子 Patch、领域校验和 Repository 事务边界。
+- [x] 完成纯结构修改跳过检索、SAP 修改按需检索、证据不足、待确认、Provider 策略、Patch 修改和导出前检查分支。
 - [x] 将 RAG/GAP 固定评估集扩展到 13 个检索案例和 8 个 GAP 案例，并加入近邻负例及跨流程/跨 Release 规则隔离。
 - [x] 完成 DeepSeek 单次/总时限、瞬时错误分类重试与指数退避，并统一前端/Nginx 截止时间。
 - [ ] 优化模型调用次数和缓存。
@@ -1156,6 +1164,6 @@ V1.0 至少定义以下角色：
 2. 完成知识来源/授权顾问审核、正式标注集和生产语义嵌入模型对比；ChromaDB 持久化、离线混合召回和固定自动化评估集已完成。
 3. 在真实外部模型/PostgreSQL 环境完成并发、长尾和容量测试；同时验证多实例下导出任务抢占与陈旧恢复，并决定生产环境采用独立队列/Worker 和对象存储还是限制为单实例低并发部署。
 4. 在具备 LibreOffice 和中文字体的目标环境完成 DOCX 视觉渲染、部署联调和运行维护签字；应用数据库中的导出二进制不得被当作永久交付物存储。
-5. Tool 契约、真实认证和向量检索稳定后再评估 LangGraph；Python SDK、CLI 和 BPMN 保持后续优先级。
+5. 结合真实外部模型容量结果优化模型调用次数和缓存；Python SDK、CLI 和 BPMN 保持后续优先级。
 
 当前本机可执行的最终流程编辑验收项和 GitHub Actions Compose/PostgreSQL 自动化部署验收已完成。生产验收剩余门槛是具体身份提供方、知识授权与顾问签字、集中日志、真实外部模型容量、LibreOffice 视觉检查和目标环境部署联调；这些项目未验证前不得宣称生产验收完成。

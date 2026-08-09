@@ -48,6 +48,13 @@ def test_settings_accept_compose_list_environment_values(monkeypatch):
     assert settings.cors_origins == ["http://localhost:8080", "https://flow.example.com"]
 
 
+def test_browser_smoke_passes_cors_origin_in_supported_format():
+    script = (ROOT / "scripts" / "browser_smoke.ps1").read_text(encoding="utf-8")
+
+    assert '$env:CORS_ORIGINS = $BaseUrl' in script
+    assert "ConvertTo-Json -InputObject @($BaseUrl)" not in script
+
+
 def test_api_image_and_nginx_keep_delivery_guards_enabled():
     api_dockerfile = (ROOT / "apps" / "api" / "Dockerfile").read_text(encoding="utf-8")
     web_dockerfile = (ROOT / "apps" / "web" / "Dockerfile").read_text(encoding="utf-8")

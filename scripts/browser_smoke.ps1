@@ -116,7 +116,7 @@ try {
         $previousExportTimeout = [Environment]::GetEnvironmentVariable("VITE_EXPORT_TIMEOUT_MS")
         try {
             $env:DATABASE_URL = "sqlite:///$databasePath"
-            $env:CORS_ORIGINS = ConvertTo-Json -InputObject @($BaseUrl) -Compress
+            $env:CORS_ORIGINS = $BaseUrl
             $env:VITE_API_URL = $apiUrl
             $env:VITE_API_TIMEOUT_MS = "2000"
             $env:VITE_EXPORT_TIMEOUT_MS = "44000"

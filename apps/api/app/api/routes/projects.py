@@ -9,7 +9,7 @@ from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session
 
 from app.agent.base import LLMProvider
-from app.agent.local_provider import LocalRuleProvider
+from app.agent.orchestrator import ProcessAgentOrchestrator, get_document_orchestrator
 from app.api.routes.flowcharts import get_provider
 from app.core.config import Settings, get_settings
 from app.core.errors import FlowchartError
@@ -24,13 +24,11 @@ from app.db.models import (
 )
 from app.db.repository import BlueprintRepository
 from app.documents.blueprint import BlueprintDocumentModel, render_docx, render_markdown
-from app.graph.evidence import validate_patch_evidence
 from app.graph.patcher import apply_patch
 from app.graph.validator import graph_warnings
 from app.knowledge.service import KnowledgeService, get_knowledge_service
 from app.models.api import ResponseMetrics
 from app.models.graph import GapStatus, GraphDocument, SapContext
-from app.models.knowledge import KnowledgeSearchRequest
 from app.models.patch import LLMPatch, NodeChanges, UpdateNodeOperation
 from app.models.projects import (
     DraftCreate,
@@ -289,28 +287,16 @@ async def modify_process(
     repository.ensure_current_revision(process, request.base_revision)
     current_graph = repository.current_graph(process)
     started = perf_counter()
-    knowledge_result = knowledge_service.search(
-        KnowledgeSearchRequest(
-            module=current_graph.module,
-            process_scope=current_graph.process_scope,
-            query=request.instruction,
-            sap_context=current_graph.sap_context,
-            top_k=5,
-        )
-    )
-    effective_provider = provider
-    policy_warnings: list[str] = []
-    if getattr(provider, "external", True) and not project.external_model_enabled:
-        effective_provider = LocalRuleProvider()
-        policy_warnings.append("项目未启用外部模型，本次修改已使用本地规则 Provider。")
-    result = await effective_provider.generate_patch(
+    result = await ProcessAgentOrchestrator(
+        provider,
+        knowledge_service,
+        external_model_enabled=project.external_model_enabled,
+    ).run(
         current_graph,
         request.instruction,
         request.locale,
-        knowledge_result.evidence,
     )
-    validate_patch_evidence(current_graph, result.patch, knowledge_result.evidence)
-    updated = apply_patch(current_graph, result.patch)
+    updated = result.graph
     _validate_gap_edit(current_graph, updated)
     repository.save_modified_graph(
         process=process,
@@ -324,7 +310,7 @@ async def modify_process(
             dict.fromkeys(
                 [
                     *request.evidence_refs,
-                    *[item.evidence_ref for item in knowledge_result.evidence],
+                    *[item.evidence_ref for item in result.evidence],
                 ]
             )
         ),
@@ -336,11 +322,10 @@ async def modify_process(
         result_revision=updated.version,
         graph=updated,
         applied_patch=result.patch,
-        evidence=knowledge_result.evidence,
+        evidence=result.evidence,
         warnings=[
             *graph_warnings(updated),
-            *knowledge_result.warnings,
-            *policy_warnings,
+            *result.warnings,
         ],
         metrics=ResponseMetrics(
             provider=result.provider,
@@ -716,13 +701,13 @@ def _render_export(
     model: BlueprintDocumentModel,
     format: str,
 ) -> tuple[bytes, str, str]:
-    if format == "markdown":
-        return render_markdown(model).encode("utf-8"), "text/markdown; charset=utf-8", "md"
-    return (
-        render_docx(model),
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "docx",
+    result = get_document_orchestrator().render(
+        model,
+        format,
+        markdown_renderer=render_markdown,
+        docx_renderer=render_docx,
     )
+    return result.content, result.media_type, result.extension
 
 
 def _export_job_response(job: ExportJobRecord) -> ExportJobResponse:

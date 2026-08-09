@@ -521,6 +521,66 @@ def test_persisted_modify_revision_release_and_changelog(persistence_client):
     assert released_snapshot.json()["graph"]["version"] == 1
 
 
+def test_persisted_diagram_edits_skip_unavailable_knowledge(persistence_client):
+    client, database = persistence_client
+    process_id = _create_process(client)
+    created = client.post(
+        f"/api/v1/processes/{process_id}/modify",
+        json={
+            "request_id": "diagram-routing-seed",
+            "base_revision": 0,
+            "instruction": "创建直接物料 P2P 流程",
+        },
+    )
+    assert created.status_code == 200, created.text
+    node_count = len(created.json()["graph"]["nodes"])
+
+    app.dependency_overrides[get_knowledge_service] = lambda: ExplodingKnowledgeService()
+    try:
+        instructions = (
+            "增加一个合规泳道",
+            "把采购申请审批到创建采购订单的连线标签改为已批准",
+            "给创建采购申请增加文件图标",
+        )
+        responses = []
+        for revision, instruction in enumerate(instructions, start=1):
+            response = client.post(
+                f"/api/v1/processes/{process_id}/modify",
+                json={
+                    "request_id": f"diagram-routing-{revision}",
+                    "base_revision": revision,
+                    "instruction": instruction,
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["result_revision"] == revision + 1
+            assert len(response.json()["graph"]["nodes"]) == node_count
+            responses.append(response.json())
+    finally:
+        app.dependency_overrides.pop(get_knowledge_service, None)
+
+    assert any(lane["label"] == "合规" for lane in responses[0]["graph"]["lanes"])
+    source_ids = {
+        node["label"]: node["id"] for node in responses[1]["graph"]["nodes"]
+    }
+    assert any(
+        edge["source"] == source_ids["采购申请审批"]
+        and edge["target"] == source_ids["创建采购订单"]
+        and edge["label"] == "已批准"
+        for edge in responses[1]["graph"]["edges"]
+    )
+    purchase_request = next(
+        node for node in responses[2]["graph"]["nodes"] if node["label"] == "创建采购申请"
+    )
+    assert purchase_request["icon"] == "file-text"
+
+    session = database.session_factory()
+    try:
+        assert session.scalar(select(func.count(ChangeLogRecord.id))) == 4
+    finally:
+        session.close()
+
+
 def test_persisted_modify_rejects_stale_revision(persistence_client):
     client, _ = persistence_client
     process_id = _create_process(client)
