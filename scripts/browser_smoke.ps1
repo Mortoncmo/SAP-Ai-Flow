@@ -150,7 +150,7 @@ try {
     $browserUrl = if ($managedServers) { "$BaseUrl/?browserSmokeManaged=1" } else { $BaseUrl }
     Invoke-Playwright @("open", $browserUrl) | Out-Null
     Invoke-Playwright @("run-code", "--filename", $codeFile) | Out-Null
-    Write-Host "Browser smoke passed: local undo/redo/layout/recovery, lanes, members, model policy, cancel/timeout/conflict recovery, local P95 budget, persisted release lifecycle, viewer permissions, blueprint downloads, responsive widths, and browser errors."
+    Write-Host "Browser smoke passed: local undo/redo/layout/recovery, node/edge/lane editing, edge inspector/viewer restrictions, members, model policy, cancel/timeout/conflict recovery, local P95 budget, persisted release lifecycle, blueprint downloads, responsive widths, and browser errors."
 }
 finally {
     try { Invoke-Playwright @("close") | Out-Null } catch { }

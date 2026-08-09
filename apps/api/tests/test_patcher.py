@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 
 from app.core.errors import PatchError
 from app.graph.patcher import apply_patch
@@ -53,6 +54,101 @@ def test_remove_node_cascades_edges_and_layout(order_graph):
     assert all(node.id != "credit" for node in updated.nodes)
     assert all(edge.source != "credit" and edge.target != "credit" for edge in updated.edges)
     assert "credit" not in updated.layout
+
+
+def test_update_edge_label_preserves_identity_and_endpoints(order_graph):
+    patch = LLMPatch.model_validate(
+        {
+            "change_summary": "修改审批结果标签",
+            "operations": [
+                {
+                    "op": "update_edge",
+                    "id": "e3",
+                    "changes": {"label": "已批准"},
+                }
+            ],
+        }
+    )
+
+    updated = apply_patch(order_graph, patch)
+
+    edge = next(item for item in updated.edges if item.id == "e3")
+    assert (edge.source, edge.target, edge.label) == ("credit", "ship", "已批准")
+    assert next(item for item in order_graph.edges if item.id == "e3").label == "通过"
+
+
+def test_update_edge_rejects_empty_changes():
+    with pytest.raises(ValidationError):
+        LLMPatch.model_validate(
+            {
+                "change_summary": "空连线修改",
+                "operations": [
+                    {"op": "update_edge", "id": "e3", "changes": {}}
+                ],
+            }
+        )
+
+
+def test_update_edge_failure_keeps_patch_atomic(order_graph):
+    patch = LLMPatch.model_validate(
+        {
+            "change_summary": "更新不存在的连线",
+            "operations": [
+                {
+                    "op": "update_node",
+                    "id": "submit",
+                    "changes": {"label": "不应保存"},
+                },
+                {
+                    "op": "update_edge",
+                    "id": "missing",
+                    "changes": {"label": "失败"},
+                },
+            ],
+        }
+    )
+
+    with pytest.raises(PatchError) as error:
+        apply_patch(order_graph, patch)
+
+    assert error.value.code == "PATCH_EDGE_NOT_FOUND"
+    assert error.value.details["operation_index"] == 1
+    assert next(node for node in order_graph.nodes if node.id == "submit").label == "提交销售订单"
+
+
+def test_update_edge_rejects_duplicate_without_mutating_graph(order_graph):
+    graph = type(order_graph).model_validate(
+        {
+            **order_graph.model_dump(mode="json"),
+            "edges": [
+                *[edge.model_dump(mode="json") for edge in order_graph.edges],
+                {
+                    "id": "e3_alternative",
+                    "source": "credit",
+                    "target": "ship",
+                    "label": "备选",
+                },
+            ],
+        }
+    )
+    patch = LLMPatch.model_validate(
+        {
+            "change_summary": "制造重复连线",
+            "operations": [
+                {
+                    "op": "update_edge",
+                    "id": "e3",
+                    "changes": {"label": "备选"},
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(PatchError) as error:
+        apply_patch(graph, patch)
+
+    assert error.value.code == "PATCH_DUPLICATE_EDGE"
+    assert next(edge for edge in graph.edges if edge.id == "e3").label == "通过"
 
 
 def test_patch_is_atomic_when_reference_is_invalid(order_graph):

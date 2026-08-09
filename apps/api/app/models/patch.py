@@ -35,6 +35,16 @@ class EdgeDraft(StrictModel):
     label: str | None = Field(default=None, max_length=200)
 
 
+class EdgeChanges(StrictModel):
+    label: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def require_change(self) -> "EdgeChanges":
+        if not self.model_fields_set:
+            raise ValueError("At least one edge field must change")
+        return self
+
+
 class LaneDraft(StrictModel):
     label: str = Field(min_length=1, max_length=80)
     color: str = Field(default="#52796f", pattern="^#[0-9a-fA-F]{6}$")
@@ -74,6 +84,12 @@ class AddEdgeOperation(StrictModel):
     edge: EdgeDraft
 
 
+class UpdateEdgeOperation(StrictModel):
+    op: Literal["update_edge"]
+    id: str
+    changes: EdgeChanges
+
+
 class RemoveEdgeOperation(StrictModel):
     op: Literal["remove_edge"]
     id: str
@@ -97,7 +113,15 @@ class RemoveLaneOperation(StrictModel):
 
 
 PatchOperation = Annotated[
-    AddNodeOperation | RemoveNodeOperation | UpdateNodeOperation | AddEdgeOperation | RemoveEdgeOperation | AddLaneOperation | UpdateLaneOperation | RemoveLaneOperation,
+    AddNodeOperation
+    | RemoveNodeOperation
+    | UpdateNodeOperation
+    | AddEdgeOperation
+    | UpdateEdgeOperation
+    | RemoveEdgeOperation
+    | AddLaneOperation
+    | UpdateLaneOperation
+    | RemoveLaneOperation,
     Field(discriminator="op"),
 ]
 

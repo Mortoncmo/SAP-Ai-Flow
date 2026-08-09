@@ -129,6 +129,106 @@ def test_unrecognized_swimlane_instruction_never_falls_back_to_process_node(orde
     assert response.json()["error"]["code"] == "INSTRUCTION_SWIMLANE_INVALID"
 
 
+def test_local_provider_adds_updates_and_removes_edges_without_changing_other_objects(
+    order_graph,
+):
+    graph = order_graph.model_dump(mode="json")
+    original_node_ids = [node["id"] for node in graph["nodes"]]
+
+    added = client.post(
+        "/api/v1/flowcharts/modify",
+        json={
+            "request_id": "request-edge-add",
+            "current_graph": graph,
+            "instruction": "连接开始到结束",
+            "locale": "zh-CN",
+        },
+    )
+    assert added.status_code == 200, added.text
+    graph = added.json()["graph"]
+    direct = next(
+        edge
+        for edge in graph["edges"]
+        if edge["source"] == "start" and edge["target"] == "end"
+    )
+
+    updated = client.post(
+        "/api/v1/flowcharts/modify",
+        json={
+            "request_id": "request-edge-update",
+            "current_graph": graph,
+            "instruction": "把开始到结束的连线标签改为快速通道",
+            "locale": "zh-CN",
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    graph = updated.json()["graph"]
+    changed = next(edge for edge in graph["edges"] if edge["id"] == direct["id"])
+    assert changed["label"] == "快速通道"
+
+    removed = client.post(
+        "/api/v1/flowcharts/modify",
+        json={
+            "request_id": "request-edge-remove",
+            "current_graph": graph,
+            "instruction": "删除开始到结束的连线",
+            "locale": "zh-CN",
+        },
+    )
+    assert removed.status_code == 200, removed.text
+    result = removed.json()["graph"]
+    assert all(edge["id"] != direct["id"] for edge in result["edges"])
+    assert [node["id"] for node in result["nodes"]] == original_node_ids
+    assert result["lanes"] == graph["lanes"]
+
+
+def test_local_provider_rejects_duplicate_missing_and_ambiguous_edges(order_graph):
+    graph = order_graph.model_dump(mode="json")
+    duplicate = client.post(
+        "/api/v1/flowcharts/modify",
+        json={
+            "request_id": "request-edge-duplicate",
+            "current_graph": graph,
+            "instruction": "连接信用检查到仓库出库",
+            "locale": "zh-CN",
+        },
+    )
+    assert duplicate.status_code == 502
+    assert duplicate.json()["error"]["code"] == "INSTRUCTION_EDGE_ALREADY_EXISTS"
+
+    missing = client.post(
+        "/api/v1/flowcharts/modify",
+        json={
+            "request_id": "request-edge-missing",
+            "current_graph": graph,
+            "instruction": "删除开始到结束的连线",
+            "locale": "zh-CN",
+        },
+    )
+    assert missing.status_code == 502
+    assert missing.json()["error"]["code"] == "INSTRUCTION_EDGE_NOT_FOUND"
+
+    graph["edges"].append(
+        {
+            "id": "e3_alternative",
+            "source": "credit",
+            "target": "ship",
+            "label": "备选",
+        }
+    )
+    ambiguous = client.post(
+        "/api/v1/flowcharts/modify",
+        json={
+            "request_id": "request-edge-ambiguous",
+            "current_graph": graph,
+            "instruction": "把信用检查到仓库出库的连线标签改为已批准",
+            "locale": "zh-CN",
+        },
+    )
+    assert ambiguous.status_code == 502
+    assert ambiguous.json()["error"]["code"] == "INSTRUCTION_EDGE_AMBIGUOUS"
+
+
 def test_local_provider_creates_mm_p2p_blueprint_with_pending_sap_metadata():
     response = client.post(
         "/api/v1/flowcharts/modify",

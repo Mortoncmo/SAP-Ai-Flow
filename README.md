@@ -9,10 +9,10 @@ SAP AI Flow 是一个面向 SAP 业务流程建模的对话式流程图工具。
 - React Flow 业务流程画布和 Dagre 自动布局。
 - 开始、结束、任务、判断和子流程五类节点。
 - 节点语义图标，以及可编辑、可拖放归属的横向/纵向泳道。
-- 文本指令增量增加、删除和改名节点。
+- 文本指令增改删节点、连线和泳道；连线支持条件标签修改。
 - 服务端生成稳定 ID，支持 Patch 临时引用。
 - Patch 深拷贝原子执行，失败时不改变当前图。
-- 画布拖动、连线、删除、节点属性编辑。
+- 画布拖动、连线、删除，以及节点/连线属性 Inspector；查看者保持只读。
 - 撤销、重做和浏览器本地恢复。
 - JSON 导入导出和全图 PNG、SVG 导出。
 - 本地规则 Provider 和 DeepSeek Provider。
@@ -186,7 +186,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\browser_smoke.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\browser_smoke.ps1 -BaseUrl http://127.0.0.1:5173
 ```
 
-自动化测试默认使用本地 Provider，不会产生模型调用费用。浏览器 smoke 使用独立 Playwright CLI 会话；未提供 `-BaseUrl` 时会自动分配端口，启动当前工作区代码和 `output/browser-smoke` 下的隔离 SQLite 数据库，完成后关闭进程。它验证本地撤销/重做/自动布局/刷新恢复、按钮与自然语言泳道操作不增加流程节点、项目成员增改删、外部模型二次确认及审计、取消/超时/修订冲突保图和重试、纯本地 Patch P95 小于 1 秒、持久化修改/发布/历史回看/新草稿、管理员与 `viewer` 权限、Markdown/Word 实际下载、1440 x 900、1024 x 768、390 x 844 无横向溢出，以及控制台和页面无错误。刷新只恢复当前图，撤销/重做栈不跨刷新保留。临时运行产物位于已忽略的 `output/browser-smoke` 和 `.playwright-cli` 目录。
+自动化测试默认使用本地 Provider，不会产生模型调用费用。浏览器 smoke 使用独立 Playwright CLI 会话；未提供 `-BaseUrl` 时会自动分配端口，启动当前工作区代码和 `output/browser-smoke` 下的隔离 SQLite 数据库，完成后关闭进程。它验证本地撤销/重做/自动布局/刷新恢复、节点/连线/泳道增改删、连线 Inspector 与查看者只读、泳道操作不误增节点、项目成员增改删、外部模型二次确认及审计、取消/超时/修订冲突保图和重试、纯本地 Patch P95 小于 1 秒、持久化修改/发布/历史回看/新草稿、Markdown/Word 实际下载、1440 x 900、1024 x 768、390 x 844 无横向溢出，以及控制台和页面无错误。刷新只恢复当前图，撤销/重做栈不跨刷新保留。临时运行产物位于已忽略的 `output/browser-smoke` 和 `.playwright-cli` 目录。
 
 ## Docker Compose
 

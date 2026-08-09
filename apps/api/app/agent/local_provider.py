@@ -1,7 +1,7 @@
 import re
 
 from app.agent.base import ProviderResult
-from app.models.graph import GraphDocument, Node, NodeIcon, NodeType, Swimlane
+from app.models.graph import Edge, GraphDocument, Node, NodeIcon, NodeType, Swimlane
 from app.models.knowledge import KnowledgeEvidence
 from app.models.patch import LLMPatch
 
@@ -30,6 +30,9 @@ class LocalRuleProvider:
     ) -> LLMPatch:
         if "泳道" in instruction:
             return self._build_swimlane_patch(graph, instruction)
+
+        if self._looks_like_edge_instruction(instruction):
+            return self._build_edge_patch(graph, instruction)
 
         if not graph.nodes or any(word in instruction for word in ("创建流程", "生成流程", "新建流程")):
             return self._create_flow(instruction, evidence)
@@ -94,6 +97,128 @@ class LocalRuleProvider:
             return self._insert_before(graph, end_node, label)
         last_node = graph.nodes[-1]
         return self._insert_after(graph, last_node, label)
+
+    @staticmethod
+    def _looks_like_edge_instruction(instruction: str) -> bool:
+        content = instruction.strip()
+        return "连线" in content or bool(
+            re.match(r"^(?:请帮我|帮我|请)?\s*(?:连接|连结)", content)
+        )
+
+    def _build_edge_patch(self, graph: GraphDocument, instruction: str) -> LLMPatch:
+        content = instruction.strip()
+        prefix = r"^(?:请帮我|帮我|请)?\s*"
+        separator = r"(?:到|至|→|->|与|和)"
+
+        match = re.search(
+            prefix
+            + r"(?:把|将)?(.+?)"
+            + separator
+            + r"(.+?)的?连线(?:的)?标签(?:改为|修改为|改成|设置为)(.+?)[。.!！]?$",
+            content,
+        )
+        if match:
+            edge = self._find_edge(graph, match.group(1), match.group(2))
+            label = match.group(3).strip("“”\"' ，,。.!！") or None
+            return LLMPatch(
+                change_summary=f"将“{self._edge_name(graph, edge)}”的标签修改为“{label or '无'}”。",
+                operations=[
+                    {"op": "update_edge", "id": edge.id, "changes": {"label": label}}
+                ],
+            )
+
+        match = re.search(
+            prefix
+            + r"(?:删除|移除)(.+?)"
+            + separator
+            + r"(.+?)的?连线[。.!！]?$",
+            content,
+        )
+        if match:
+            edge = self._find_edge(graph, match.group(1), match.group(2))
+            return LLMPatch(
+                change_summary=f"删除“{self._edge_name(graph, edge)}”连线。",
+                operations=[{"op": "remove_edge", "id": edge.id}],
+            )
+
+        match = re.search(
+            prefix
+            + r"(?:连接|连结)(.+?)"
+            + separator
+            + r"(.+?)(?:的?连线)?[。.!！]?$",
+            content,
+        )
+        if match:
+            source = self._find_node(graph, match.group(1))
+            target = self._find_node(graph, match.group(2))
+            if source.id == target.id:
+                from app.core.errors import ProviderError
+
+                raise ProviderError(
+                    "INSTRUCTION_EDGE_SELF_REFERENCE",
+                    "不允许节点连接自身。",
+                )
+            if any(
+                edge.source == source.id and edge.target == target.id
+                for edge in graph.edges
+            ):
+                from app.core.errors import ProviderError
+
+                raise ProviderError(
+                    "INSTRUCTION_EDGE_ALREADY_EXISTS",
+                    f"“{source.label}”到“{target.label}”的连线已经存在。",
+                )
+            return LLMPatch(
+                change_summary=f"连接“{source.label}”到“{target.label}”。",
+                operations=[
+                    {
+                        "op": "add_edge",
+                        "edge": {"source": source.id, "target": target.id},
+                    }
+                ],
+            )
+
+        from app.core.errors import ProviderError
+
+        raise ProviderError(
+            "INSTRUCTION_EDGE_INVALID",
+            "没有识别出连线操作，请使用“连接开始到结束”等表达。",
+        )
+
+    def _find_edge(
+        self,
+        graph: GraphDocument,
+        source_fragment: str,
+        target_fragment: str,
+    ) -> Edge:
+        source = self._find_node(graph, source_fragment)
+        target = self._find_node(graph, target_fragment)
+        matches = [
+            edge
+            for edge in graph.edges
+            if edge.source == source.id and edge.target == target.id
+        ]
+        if not matches:
+            from app.core.errors import ProviderError
+
+            raise ProviderError(
+                "INSTRUCTION_EDGE_NOT_FOUND",
+                f"没有找到“{source.label}”到“{target.label}”的连线。",
+            )
+        if len(matches) > 1:
+            from app.core.errors import ProviderError
+
+            raise ProviderError(
+                "INSTRUCTION_EDGE_AMBIGUOUS",
+                f"“{source.label}”到“{target.label}”存在多条连线，请先在画布中确认。",
+            )
+        return matches[0]
+
+    @staticmethod
+    def _edge_name(graph: GraphDocument, edge: Edge) -> str:
+        source = next(node.label for node in graph.nodes if node.id == edge.source)
+        target = next(node.label for node in graph.nodes if node.id == edge.target)
+        return f"{source}到{target}"
 
     def _build_swimlane_patch(self, graph: GraphDocument, instruction: str) -> LLMPatch:
         match = re.search(

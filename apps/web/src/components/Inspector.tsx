@@ -11,6 +11,7 @@ import type {
   BestPracticeReference,
   ConfigurationPoint,
   GapStatus,
+  FlowEdge,
   GraphDocument,
   KnowledgeEvidence,
   MetadataStatus,
@@ -24,6 +25,7 @@ import type {
 
 interface InspectorProps {
   selectedNodeId: string | null
+  selectedEdgeId: string | null
   onClearSelection: () => void
   projectId?: string
   processId?: string
@@ -57,6 +59,7 @@ const gapStatusLabel: Record<GapStatus, string> = {
 
 export function Inspector({
   selectedNodeId,
+  selectedEdgeId,
   onClearSelection,
   projectId,
   processId,
@@ -68,6 +71,7 @@ export function Inspector({
   const graph = useFlowStore((state) => state.graph)
   const commitGraph = useFlowStore((state) => state.commitGraph)
   const node = graph.nodes.find((item) => item.id === selectedNodeId)
+  const edge = graph.edges.find((item) => item.id === selectedEdgeId)
   const [label, setLabel] = useState('')
   const [description, setDescription] = useState('')
   const [nodeType, setNodeType] = useState<NodeType>('task')
@@ -119,6 +123,16 @@ export function Inspector({
     setKnowledgeEvidence([])
     setKnowledgeMessage('')
   }, [node])
+
+  if (edge) {
+    return (
+      <EdgeInspector
+        edge={edge}
+        readOnly={readOnly}
+        onClearSelection={onClearSelection}
+      />
+    )
+  }
 
   if (!node) {
     const decisions = graph.nodes.filter((item) => item.type === 'decision').length
@@ -504,6 +518,117 @@ export function Inspector({
         </div>
         </fieldset>
       </form>
+    </aside>
+  )
+}
+
+interface EdgeInspectorProps {
+  edge: FlowEdge
+  readOnly: boolean
+  onClearSelection: () => void
+}
+
+function EdgeInspector({ edge, readOnly, onClearSelection }: EdgeInspectorProps) {
+  const graph = useFlowStore((state) => state.graph)
+  const commitGraph = useFlowStore((state) => state.commitGraph)
+  const [label, setLabel] = useState(edge.label ?? '')
+  const [validationError, setValidationError] = useState('')
+  const source = graph.nodes.find((node) => node.id === edge.source)
+  const target = graph.nodes.find((node) => node.id === edge.target)
+
+  useEffect(() => {
+    setLabel(edge.label ?? '')
+    setValidationError('')
+  }, [edge.id, edge.label])
+
+  const save = () => {
+    if (readOnly) return
+    const nextLabel = label.trim() || null
+    const duplicate = graph.edges.some(
+      (item) =>
+        item.id !== edge.id &&
+        item.source === edge.source &&
+        item.target === edge.target &&
+        (item.label ?? null) === nextLabel,
+    )
+    if (duplicate) {
+      setValidationError('相同起点、终点和标签的连线已经存在。')
+      return
+    }
+    commitGraph({
+      ...graph,
+      version: graph.version + 1,
+      edges: graph.edges.map((item) =>
+        item.id === edge.id ? { ...item, label: nextLabel } : item,
+      ),
+    })
+    setValidationError('')
+  }
+
+  const remove = () => {
+    if (readOnly) return
+    commitGraph({
+      ...graph,
+      version: graph.version + 1,
+      edges: graph.edges.filter((item) => item.id !== edge.id),
+    })
+    onClearSelection()
+  }
+
+  return (
+    <aside className="inspector" aria-label="连线属性">
+      <div className="inspector__heading">
+        <span>连线属性</span>
+        <small>{edge.id}</small>
+      </div>
+      <dl className="edge-inspector__summary">
+        <div>
+          <dt>起点</dt>
+          <dd>{source?.label ?? edge.source}</dd>
+          <code>{edge.source}</code>
+        </div>
+        <div>
+          <dt>终点</dt>
+          <dd>{target?.label ?? edge.target}</dd>
+          <code>{edge.target}</code>
+        </div>
+        {readOnly && (
+          <div>
+            <dt>条件标签</dt>
+            <dd>{edge.label || '无'}</dd>
+          </div>
+        )}
+      </dl>
+      {!readOnly && (
+        <form
+          className="inspector-form"
+          onSubmit={(event) => {
+            event.preventDefault()
+            save()
+          }}
+        >
+          <label>
+            条件标签
+            <input
+              value={label}
+              maxLength={200}
+              placeholder="例如：通过"
+              onChange={(event) => setLabel(event.target.value)}
+            />
+          </label>
+          {validationError && <p className="inspector-form__error">{validationError}</p>}
+          <div className="inspector-form__actions">
+            <button type="button" className="icon-button danger" onClick={remove} title="删除连线">
+              <Trash2 size={17} />
+              <span>删除</span>
+            </button>
+            <button type="submit" className="command-button compact">
+              <Save size={17} />
+              <span>保存</span>
+            </button>
+          </div>
+        </form>
+      )}
     </aside>
   )
 }

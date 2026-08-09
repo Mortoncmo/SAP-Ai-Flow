@@ -630,6 +630,40 @@ button {
   text-overflow: ellipsis;
 }
 
+.edge-inspector__summary {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 17px 0 2px;
+}
+
+.edge-inspector__summary div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.edge-inspector__summary dt {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.edge-inspector__summary dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.edge-inspector__summary code {
+  overflow: hidden;
+  color: #68736d;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .lane-manager {
   margin-top: 22px;
   padding-top: 16px;

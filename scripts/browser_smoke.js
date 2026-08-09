@@ -85,6 +85,20 @@ async page => {
     return { filename, ...content }
   }
 
+  const submitLocalInstruction = async instruction => {
+    await page.locator('.command-dock textarea').fill(instruction)
+    const responsePromise = page.waitForResponse(response =>
+      response.url().endsWith('/api/v1/flowcharts/modify')
+      && response.request().method() === 'POST',
+    )
+    await page.locator('.command-dock button[type=submit]').click()
+    const response = await responsePromise
+    assert(response.ok(), `local instruction returned ${response.status()}: ${instruction}`)
+    const payload = await response.json()
+    await page.locator('.command-dock__status').filter({ hasText: payload.applied_patch.change_summary }).waitFor()
+    return payload.graph
+  }
+
   page.on('console', captureConsoleError)
   page.on('pageerror', capturePageError)
   await page.context().setExtraHTTPHeaders({ 'X-User-ID': adminUserId })
@@ -204,6 +218,57 @@ async page => {
     for (const required of ['\u9500\u552e', '\u7269\u6d41']) {
       assert(labels.includes(required), `missing lane: ${required}`)
     }
+
+    stage = 'testing natural-language edge operations'
+    const edgeNodeCount = await page.locator('.react-flow__node-business').count()
+    const edgeLaneCount = await page.locator('.lane-editor__name').count()
+    const edgeCountBefore = await page.locator('.react-flow__edge').count()
+    let edgeGraph = await submitLocalInstruction('\u8fde\u63a5\u5f00\u59cb\u5230\u7ed3\u675f')
+    const directEdge = edgeGraph.edges.find(edge => edge.source === 'start' && edge.target === 'end')
+    assert(directEdge, 'natural-language edge creation did not add start -> end')
+    assert(edgeGraph.nodes.length === edgeNodeCount, 'edge creation changed process nodes')
+    assert(edgeGraph.lanes.length === edgeLaneCount, 'edge creation changed swimlanes')
+    assert(await page.locator('.react-flow__edge').count() === edgeCountBefore + 1, 'created edge did not render')
+
+    edgeGraph = await submitLocalInstruction(
+      '\u628a\u5f00\u59cb\u5230\u7ed3\u675f\u7684\u8fde\u7ebf\u6807\u7b7e\u6539\u4e3a\u5feb\u901f\u901a\u9053',
+    )
+    const updatedDirectEdge = edgeGraph.edges.find(edge => edge.id === directEdge.id)
+    assert(updatedDirectEdge?.label === '\u5feb\u901f\u901a\u9053', 'natural-language edge label update failed')
+    assert(updatedDirectEdge.source === 'start' && updatedDirectEdge.target === 'end', 'edge update changed endpoints')
+
+    edgeGraph = await submitLocalInstruction('\u5220\u9664\u5f00\u59cb\u5230\u7ed3\u675f\u7684\u8fde\u7ebf')
+    assert(!edgeGraph.edges.some(edge => edge.id === directEdge.id), 'natural-language edge deletion failed')
+    assert(edgeGraph.nodes.length === edgeNodeCount, 'edge deletion changed process nodes')
+    assert(edgeGraph.lanes.length === edgeLaneCount, 'edge deletion changed swimlanes')
+    assert(await page.locator('.react-flow__edge').count() === edgeCountBefore, 'deleted edge remains rendered')
+
+    stage = 'testing canvas edge inspector'
+    const inspectedEdge = page.locator('.react-flow__edge').first()
+    await inspectedEdge.dispatchEvent('click')
+    const edgeInspector = page.locator('aside[aria-label="\u8fde\u7ebf\u5c5e\u6027"]')
+    await edgeInspector.waitFor()
+    const inspectedEdgeId = await edgeInspector.locator('.inspector__heading small').textContent()
+    assert(inspectedEdgeId, 'edge inspector did not expose the permanent edge ID')
+    await edgeInspector.getByLabel('\u6761\u4ef6\u6807\u7b7e').fill('\u753b\u5e03\u5df2\u786e\u8ba4')
+    await edgeInspector.getByRole('button', { name: '\u4fdd\u5b58' }).click()
+    const storedGraph = await page.evaluate(edgeId => {
+      const persisted = JSON.parse(localStorage.getItem('sap-ai-flow-state') || '{}')
+      const graph = persisted.state?.graph
+      return {
+        edge: graph?.edges?.find(edge => edge.id === edgeId),
+        nodeCount: graph?.nodes?.length,
+        laneCount: graph?.lanes?.length,
+      }
+    }, inspectedEdgeId)
+    assert(storedGraph.edge?.label === '\u753b\u5e03\u5df2\u786e\u8ba4', 'edge inspector did not save the label')
+    assert(storedGraph.nodeCount === edgeNodeCount, 'edge inspector changed nodes')
+    assert(storedGraph.laneCount === edgeLaneCount, 'edge inspector changed lanes')
+    await edgeInspector.getByRole('button', { name: '\u5220\u9664' }).click()
+    await page.locator('aside[aria-label="\u6d41\u7a0b\u6982\u51b5"]').waitFor()
+    assert(await page.locator('.react-flow__edge').count() === edgeCountBefore - 1, 'edge inspector did not delete the edge')
+    assert(await page.locator('.react-flow__node-business').count() === edgeNodeCount, 'edge inspector deletion changed nodes')
+    assert(await page.locator('.lane-editor__name').count() === edgeLaneCount, 'edge inspector deletion changed lanes')
 
     // Create or reuse a stable project fixture through the real API, then exercise it through the UI.
     stage = 'creating project fixture'
@@ -619,6 +684,17 @@ async page => {
     assert(await page.locator('.command-dock textarea').isDisabled(), 'viewer can edit natural-language instructions')
     assert(await page.locator('.command-dock button[type=submit]').isDisabled(), 'viewer can submit modifications')
     assert(await page.getByRole('button', { name: '\u5bfc\u51fa Markdown \u84dd\u56fe' }).isEnabled(), 'viewer cannot export blueprints')
+
+    stage = 'testing viewer edge inspector'
+    const viewerEdgeCount = await page.locator('.react-flow__edge').count()
+    const viewerEdge = page.locator('.react-flow__edge').first()
+    await viewerEdge.dispatchEvent('click')
+    const viewerEdgeInspector = page.locator('aside[aria-label="\u8fde\u7ebf\u5c5e\u6027"]')
+    await viewerEdgeInspector.waitFor()
+    assert(await viewerEdgeInspector.getByLabel('\u6761\u4ef6\u6807\u7b7e').count() === 0, 'viewer can edit the edge label')
+    assert(await viewerEdgeInspector.getByRole('button', { name: '\u5220\u9664' }).count() === 0, 'viewer can delete an edge')
+    await page.keyboard.press('Delete')
+    assert(await page.locator('.react-flow__edge').count() === viewerEdgeCount, 'viewer deleted an edge with the keyboard')
 
     const forbiddenMembers = await page.request.get(`${fixture.apiRoot}/api/v1/projects/${fixture.projectId}/members`, {
       headers: { 'X-User-ID': viewerUserId },

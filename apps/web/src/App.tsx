@@ -125,6 +125,7 @@ function FlowWorkspace({
   const redo = useFlowStore((state) => state.redo)
   const reset = useFlowStore((state) => state.reset)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [instruction, setInstruction] = useState('在采购申请后增加供应商确认')
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState('本地规则引擎已就绪')
@@ -244,6 +245,7 @@ function FlowWorkspace({
         setReadOnlyRevision(null)
         setReleaseNo(history.find((item) => item.revision_no === detail.current_revision)?.release_no ?? null)
         setSelectedNodeId(null)
+        setSelectedEdgeId(null)
         setMessage(`已打开 ${detail.name} · 修订 ${detail.current_revision}`)
         setError('')
         fitCanvas()
@@ -577,13 +579,15 @@ function FlowWorkspace({
         source: edge.source,
         target: edge.target,
         label: edge.label ?? undefined,
+        selected: edge.id === selectedEdgeId,
+        deletable: !isReadOnly,
         type: 'smoothstep',
         markerEnd: { type: MarkerType.ArrowClosed, width: 18, height: 18 },
         style: { stroke: '#68736d', strokeWidth: 1.7 },
         labelStyle: { fill: '#3f4944', fontSize: 12, fontWeight: 600 },
         labelBgStyle: { fill: '#f7f7f4', fillOpacity: 0.94 },
       })),
-    [graph.edges],
+    [graph.edges, isReadOnly, selectedEdgeId],
   )
 
   const handleSubmit = async (event: FormEvent) => {
@@ -670,19 +674,22 @@ function FlowWorkspace({
     (connection: Connection) => {
       if (isReadOnly) return
       if (!connection.source || !connection.target || connection.source === connection.target) return
+      const edgeId = createId('edge')
       commitGraph({
         ...graph,
         version: graph.version + 1,
         edges: [
           ...graph.edges,
           {
-            id: createId('edge'),
+            id: edgeId,
             source: connection.source,
             target: connection.target,
             label: null,
           },
         ],
       })
+      setSelectedNodeId(null)
+      setSelectedEdgeId(edgeId)
     },
     [commitGraph, graph, isReadOnly],
   )
@@ -703,6 +710,8 @@ function FlowWorkspace({
       }
       const normalized = normalizeGraph(parsed)
       commitGraph(Object.keys(normalized.layout ?? {}).length ? normalized : layoutGraph(normalized))
+      setSelectedNodeId(null)
+      setSelectedEdgeId(null)
       fitCanvas()
       setMessage(`已导入 ${file.name}`)
       setError('')
@@ -964,6 +973,7 @@ function FlowWorkspace({
               if (graph.nodes.length > 0 && !window.confirm('新建流程将清空当前画布，是否继续？')) return
               reset(createEmptyGraph())
               setSelectedNodeId(null)
+              setSelectedEdgeId(null)
               setMessage('已新建空白流程')
               fitCanvas()
             }}
@@ -1080,9 +1090,17 @@ function FlowWorkspace({
             nodesDraggable={!isReadOnly}
             nodesConnectable={!isReadOnly}
             onNodeClick={(_, node) => {
-              if (node.type === 'business') setSelectedNodeId(node.id)
+              setSelectedEdgeId(null)
+              setSelectedNodeId(node.type === 'business' ? node.id : null)
             }}
-            onPaneClick={() => setSelectedNodeId(null)}
+            onEdgeClick={(_, edge) => {
+              setSelectedNodeId(null)
+              setSelectedEdgeId(edge.id)
+            }}
+            onPaneClick={() => {
+              setSelectedNodeId(null)
+              setSelectedEdgeId(null)
+            }}
             onNodeDragStop={(_, node) => {
               if (isReadOnly) return
               if (node.type !== 'business') return
@@ -1110,6 +1128,7 @@ function FlowWorkspace({
                 layout: Object.fromEntries(Object.entries(graph.layout).filter(([id]) => !ids.has(id))),
               })
               setSelectedNodeId(null)
+              setSelectedEdgeId(null)
             }}
             onEdgesDelete={(deleted: Edge[]) => {
               if (isReadOnly) return
@@ -1119,6 +1138,7 @@ function FlowWorkspace({
                 version: graph.version + 1,
                 edges: graph.edges.filter((edge) => !ids.has(edge.id)),
               })
+              setSelectedEdgeId(null)
             }}
             fitView
             fitViewOptions={{
@@ -1155,7 +1175,11 @@ function FlowWorkspace({
         {inspectorOpen && (
           <Inspector
             selectedNodeId={selectedNodeId}
-            onClearSelection={() => setSelectedNodeId(null)}
+            selectedEdgeId={selectedEdgeId}
+            onClearSelection={() => {
+              setSelectedNodeId(null)
+              setSelectedEdgeId(null)
+            }}
             projectId={projectId}
             processId={processId}
             baseRevision={baseRevision}

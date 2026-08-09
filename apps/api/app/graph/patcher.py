@@ -65,12 +65,27 @@ def apply_patch(current: GraphDocument, patch: LLMPatch) -> GraphDocument:
                         label=operation.edge.label,
                     )
                 )
+            elif operation.op == "update_edge":
+                edge = _require_edge(working, operation.id)
+                updated = Edge.model_validate(
+                    {
+                        **edge.model_dump(mode="python"),
+                        **operation.changes.model_dump(exclude_unset=True),
+                    }
+                )
+                candidate = (updated.source, updated.target, updated.label or "")
+                existing = {
+                    (item.source, item.target, item.label or "")
+                    for item in working.edges
+                    if item.id != edge.id
+                }
+                if candidate in existing:
+                    raise PatchError("PATCH_DUPLICATE_EDGE", "不允许生成重复连线。")
+                working.edges = [
+                    updated if item.id == edge.id else item for item in working.edges
+                ]
             elif operation.op == "remove_edge":
-                if not any(edge.id == operation.id for edge in working.edges):
-                    raise PatchError(
-                        "PATCH_EDGE_NOT_FOUND",
-                        f"连线 {operation.id} 不存在。",
-                    )
+                _require_edge(working, operation.id)
                 working.edges = [edge for edge in working.edges if edge.id != operation.id]
             elif operation.op == "add_lane":
                 _require_unused_reference(operation.ref, refs)
@@ -151,6 +166,17 @@ def _require_node(graph: GraphDocument, node_id: str) -> Node:
             details={"node_id": node_id},
         )
     return node
+
+
+def _require_edge(graph: GraphDocument, edge_id: str) -> Edge:
+    edge = next((item for item in graph.edges if item.id == edge_id), None)
+    if edge is None:
+        raise PatchError(
+            "PATCH_EDGE_NOT_FOUND",
+            f"连线 {edge_id} 不存在。",
+            details={"edge_id": edge_id},
+        )
+    return edge
 
 
 def _require_lane(graph: GraphDocument, lane_id: str) -> Swimlane:
