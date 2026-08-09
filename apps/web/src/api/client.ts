@@ -12,6 +12,7 @@ import type {
   RevisionSummary,
   RevisionDetail,
   GapDecisionResponse,
+  ExportJobResponse,
   ProjectMember,
   ProjectRole,
 } from '../types'
@@ -308,22 +309,87 @@ export async function exportBlueprint(
   format: 'markdown' | 'docx',
   signal?: AbortSignal,
 ): Promise<{ blob: Blob; filename: string }> {
-  const response = await authorizedFetch(`${API_ROOT}/api/v1/processes/${encodeURIComponent(processId)}/exports`, {
+  const route = `/api/v1/processes/${encodeURIComponent(processId)}/exports/jobs`
+  const deadline = Date.now() + EXPORT_REQUEST_TIMEOUT_MS
+  const created = await authorizedFetch(`${API_ROOT}${route}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ revision_no: revisionNo, format }),
     signal,
-  }, EXPORT_REQUEST_TIMEOUT_MS)
+  }, remainingExportTime(deadline))
+  const createdPayload = await created.json()
+  if (!created.ok) {
+    throw new ApiError(
+      createdPayload?.error?.message ?? '蓝图导出失败。',
+      createdPayload?.error?.code,
+    )
+  }
+  let job = createdPayload as ExportJobResponse
+  while (job.status === 'pending' || job.status === 'running') {
+    await waitForExportPoll(signal, deadline)
+    const statusResponse = await authorizedFetch(
+      `${API_ROOT}${route}/${encodeURIComponent(job.export_id)}`,
+      { signal },
+      remainingExportTime(deadline),
+    )
+    const statusPayload = await statusResponse.json()
+    if (!statusResponse.ok) {
+      throw new ApiError(
+        statusPayload?.error?.message ?? '导出状态查询失败。',
+        statusPayload?.error?.code,
+      )
+    }
+    job = statusPayload as ExportJobResponse
+  }
+  if (job.status !== 'completed' || !job.download_url) {
+    throw new ApiError(
+      job.error_message ?? (job.status === 'expired' ? '导出文件已过期，请重新生成。' : '蓝图导出失败。'),
+      job.error_code ?? (job.status === 'expired' ? 'EXPORT_EXPIRED' : 'EXPORT_RENDER_FAILED'),
+    )
+  }
+  const response = await authorizedFetch(
+    `${API_ROOT}${job.download_url}`,
+    { signal },
+    remainingExportTime(deadline),
+  )
   if (!response.ok) {
     const payload = await response.json()
-    throw new ApiError(payload?.error?.message ?? '蓝图导出失败。', payload?.error?.code)
+    throw new ApiError(payload?.error?.message ?? '蓝图下载失败。', payload?.error?.code)
   }
   const disposition = response.headers.get('Content-Disposition') ?? ''
   const filename = parseDownloadFilename(
     disposition,
-    `SAP-Blueprint.${format === 'docx' ? 'docx' : 'md'}`,
+    job.filename ?? `SAP-Blueprint.${format === 'docx' ? 'docx' : 'md'}`,
   )
   return { blob: await response.blob(), filename }
+}
+
+function remainingExportTime(deadline: number): number {
+  const remaining = deadline - Date.now()
+  if (remaining <= 0) {
+    throw new ApiError('蓝图导出超时，请稍后查询或重新生成。', 'REQUEST_TIMEOUT')
+  }
+  return Math.max(1, remaining)
+}
+
+function waitForExportPoll(signal: AbortSignal | undefined, deadline: number): Promise<void> {
+  remainingExportTime(deadline)
+  return new Promise((resolve, reject) => {
+    let timeoutId: ReturnType<typeof globalThis.setTimeout> | undefined
+    const abort = () => {
+      if (timeoutId !== undefined) globalThis.clearTimeout(timeoutId)
+      reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'))
+    }
+    if (signal?.aborted) {
+      abort()
+      return
+    }
+    timeoutId = globalThis.setTimeout(() => {
+      signal?.removeEventListener('abort', abort)
+      resolve()
+    }, 250)
+    signal?.addEventListener('abort', abort, { once: true })
+  })
 }
 
 async function postJson<T>(

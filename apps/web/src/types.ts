@@ -244,6 +244,25 @@ export interface ReleaseResponse {
   lifecycle_state: string
 }
 
+export type ExportJobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'expired'
+
+export interface ExportJobResponse {
+  export_id: string
+  process_id: string
+  revision_no: number
+  format: 'markdown' | 'docx'
+  status: ExportJobStatus
+  filename: string | null
+  content_length: number | null
+  error_code: string | null
+  error_message: string | null
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+  expires_at: string | null
+  download_url: string | null
+}
+
 export interface GapDecisionResponse {
   process_id: string
   node_id: string

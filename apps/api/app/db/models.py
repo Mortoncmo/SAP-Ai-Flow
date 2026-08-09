@@ -6,6 +6,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -136,3 +137,27 @@ class GapDecisionRecord(Base):
     comment: Mapped[str] = mapped_column(Text, nullable=False)
     decided_by: Mapped[str] = mapped_column(String(80), nullable=False)
     decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ExportJobRecord(Base):
+    __tablename__ = "export_job"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    process_id: Mapped[str] = mapped_column(
+        String(80), ForeignKey("process.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    revision_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    format: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    filename: Mapped[str | None] = mapped_column(String(255))
+    fallback_filename: Mapped[str | None] = mapped_column(String(255))
+    media_type: Mapped[str | None] = mapped_column(String(120))
+    content: Mapped[bytes | None] = mapped_column(LargeBinary)
+    content_length: Mapped[int | None] = mapped_column(Integer)
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    error_message: Mapped[str | None] = mapped_column(String(500))
+    created_by: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

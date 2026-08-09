@@ -1,17 +1,21 @@
+import logging
 import re
 from datetime import UTC, datetime
 from time import perf_counter
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Response
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session
 
 from app.agent.base import LLMProvider
 from app.agent.local_provider import LocalRuleProvider
 from app.api.routes.flowcharts import get_provider
+from app.core.config import Settings, get_settings
 from app.core.errors import FlowchartError
 from app.db.database import get_db_session
 from app.db.models import (
+    ExportJobRecord,
     ProcessRecord,
     ProcessRevisionRecord,
     ProjectAuditRecord,
@@ -30,6 +34,7 @@ from app.models.knowledge import KnowledgeSearchRequest
 from app.models.patch import LLMPatch, NodeChanges, UpdateNodeOperation
 from app.models.projects import (
     DraftCreate,
+    ExportJobResponse,
     ExportRequest,
     GapDecisionCreate,
     GapDecisionResponse,
@@ -54,6 +59,7 @@ from app.models.projects import (
 from app.security.auth import ProjectRole, UserContext, get_user_context, require_role
 
 router = APIRouter(prefix="/api/v1", tags=["projects"])
+logger = logging.getLogger(__name__)
 
 
 def get_repository(session: Session = Depends(get_db_session)) -> BlueprintRepository:
@@ -522,26 +528,8 @@ def export_process(
     process = _authorize_process(repository, process_id, user, ProjectRole.VIEWER)
     project = repository.require_project(process.project_id, user_id=user.user_id)
     revision = repository.require_revision(process_id, request.revision_no)
-    model = BlueprintDocumentModel(
-        project_name=project.name,
-        customer_name=project.customer_name,
-        process_name=process.name,
-        process_id=process.id,
-        revision_no=revision.revision_no,
-        release_no=revision.release_no,
-        lifecycle_state=revision.lifecycle_state,
-        created_by=revision.created_by,
-        created_at=revision.created_at.isoformat(),
-        graph=GraphDocument.model_validate(revision.graph_json),
-    )
-    if request.format == "markdown":
-        content = render_markdown(model).encode("utf-8")
-        media_type = "text/markdown; charset=utf-8"
-        extension = "md"
-    else:
-        content = render_docx(model)
-        media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        extension = "docx"
+    model = _blueprint_document(project, process, revision)
+    content, media_type, extension = _render_export(model, request.format)
     unicode_filename, fallback_filename = _export_filenames(
         process_name=process.name,
         process_id=process.id,
@@ -558,6 +546,206 @@ def export_process(
                 f"filename*=UTF-8''{quote(unicode_filename)}"
             )
         },
+    )
+
+
+@router.post(
+    "/processes/{process_id}/exports/jobs",
+    response_model=ExportJobResponse,
+    status_code=202,
+)
+def create_export_job(
+    process_id: str,
+    request: ExportRequest,
+    background_tasks: BackgroundTasks,
+    repository: BlueprintRepository = Depends(get_repository),
+    settings: Settings = Depends(get_settings),
+    user: UserContext = Depends(get_user_context),
+) -> ExportJobResponse:
+    _authorize_process(repository, process_id, user, ProjectRole.VIEWER)
+    repository.require_revision(process_id, request.revision_no)
+    job = repository.create_export_job(
+        process_id=process_id,
+        revision_no=request.revision_no,
+        format=request.format,
+        user_id=user.user_id,
+    )
+    background_tasks.add_task(
+        _run_export_job,
+        job.id,
+        repository.session.get_bind(),
+        settings.export_retention_hours,
+        settings.export_stale_minutes,
+    )
+    return _export_job_response(job)
+
+
+@router.get(
+    "/processes/{process_id}/exports/jobs/{export_id}",
+    response_model=ExportJobResponse,
+)
+def get_export_job(
+    process_id: str,
+    export_id: str,
+    background_tasks: BackgroundTasks,
+    repository: BlueprintRepository = Depends(get_repository),
+    settings: Settings = Depends(get_settings),
+    user: UserContext = Depends(get_user_context),
+) -> ExportJobResponse:
+    _authorize_process(repository, process_id, user, ProjectRole.VIEWER)
+    job = repository.require_export_job(process_id, export_id)
+    if job.status in {"pending", "running"}:
+        background_tasks.add_task(
+            _run_export_job,
+            job.id,
+            repository.session.get_bind(),
+            settings.export_retention_hours,
+            settings.export_stale_minutes,
+        )
+    return _export_job_response(job)
+
+
+@router.get("/processes/{process_id}/exports/jobs/{export_id}/download")
+def download_export_job(
+    process_id: str,
+    export_id: str,
+    repository: BlueprintRepository = Depends(get_repository),
+    user: UserContext = Depends(get_user_context),
+) -> Response:
+    _authorize_process(repository, process_id, user, ProjectRole.VIEWER)
+    job = repository.require_export_job(process_id, export_id)
+    if job.status == "expired":
+        raise FlowchartError(
+            "EXPORT_EXPIRED",
+            "导出文件已过期，请重新生成。",
+            status_code=410,
+            details={"export_id": export_id},
+        )
+    if job.status == "failed":
+        raise FlowchartError(
+            job.error_code or "EXPORT_RENDER_FAILED",
+            job.error_message or "蓝图渲染失败，请稍后重试。",
+            status_code=409,
+            details={"export_id": export_id},
+        )
+    if job.status != "completed" or job.content is None:
+        raise FlowchartError(
+            "EXPORT_NOT_READY",
+            "导出任务尚未完成。",
+            status_code=409,
+            details={"export_id": export_id, "status": job.status},
+        )
+    return Response(
+        content=job.content,
+        media_type=job.media_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{job.fallback_filename or "SAP-Blueprint"}"; '
+                f"filename*=UTF-8''{quote(job.filename or 'SAP-Blueprint')}"
+            )
+        },
+    )
+
+
+def _run_export_job(
+    export_id: str,
+    bind: Engine | Connection,
+    retention_hours: int,
+    stale_minutes: int,
+) -> None:
+    with Session(bind=bind, expire_on_commit=False) as session:
+        repository = BlueprintRepository(session)
+        try:
+            if not repository.claim_export_job(export_id, stale_minutes=stale_minutes):
+                return
+            job = repository.require_export_job_unscoped(export_id)
+            process = repository.require_process(job.process_id)
+            project = repository.require_project(process.project_id)
+            revision = repository.require_revision(process.id, job.revision_no)
+            model = _blueprint_document(project, process, revision)
+            content, media_type, extension = _render_export(model, job.format)
+            unicode_filename, fallback_filename = _export_filenames(
+                process_name=process.name,
+                process_id=process.id,
+                revision_no=revision.revision_no,
+                release_no=revision.release_no,
+                extension=extension,
+            )
+            repository.complete_export_job(
+                job=job,
+                filename=unicode_filename,
+                fallback_filename=fallback_filename,
+                media_type=media_type,
+                content=content,
+                retention_hours=retention_hours,
+            )
+        except Exception:
+            session.rollback()
+            logger.error("Blueprint export job failed", extra={"export_id": export_id})
+            try:
+                job = repository.require_export_job_unscoped(export_id)
+                repository.fail_export_job(job)
+            except Exception:
+                session.rollback()
+                logger.error(
+                    "Failed to persist blueprint export failure",
+                    extra={"export_id": export_id},
+                )
+
+
+def _blueprint_document(
+    project: ProjectRecord,
+    process: ProcessRecord,
+    revision: ProcessRevisionRecord,
+) -> BlueprintDocumentModel:
+    return BlueprintDocumentModel(
+        project_name=project.name,
+        customer_name=project.customer_name,
+        process_name=process.name,
+        process_id=process.id,
+        revision_no=revision.revision_no,
+        release_no=revision.release_no,
+        lifecycle_state=revision.lifecycle_state,
+        created_by=revision.created_by,
+        created_at=revision.created_at.isoformat(),
+        graph=GraphDocument.model_validate(revision.graph_json),
+    )
+
+
+def _render_export(
+    model: BlueprintDocumentModel,
+    format: str,
+) -> tuple[bytes, str, str]:
+    if format == "markdown":
+        return render_markdown(model).encode("utf-8"), "text/markdown; charset=utf-8", "md"
+    return (
+        render_docx(model),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "docx",
+    )
+
+
+def _export_job_response(job: ExportJobRecord) -> ExportJobResponse:
+    download_url = (
+        f"/api/v1/processes/{job.process_id}/exports/jobs/{job.id}/download"
+        if job.status == "completed"
+        else None
+    )
+    return ExportJobResponse(
+        export_id=job.id,
+        process_id=job.process_id,
+        revision_no=job.revision_no,
+        format=job.format,
+        status=job.status,
+        filename=job.filename,
+        content_length=job.content_length,
+        error_code=job.error_code,
+        error_message=job.error_message,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        expires_at=job.expires_at,
+        download_url=download_url,
     )
 
 

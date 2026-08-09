@@ -177,17 +177,34 @@ $releaseDetail = Invoke-DemoApi `
 
 $markdownPath = Join-Path $outputPath "mm-p2p-blueprint-release-$($release.release_no).md"
 $docxPath = Join-Path $outputPath "mm-p2p-blueprint-release-$($release.release_no).docx"
+$exportIds = @()
 foreach ($export in @(
     @{ format = "markdown"; path = $markdownPath },
     @{ format = "docx"; path = $docxPath }
 )) {
+    $job = Invoke-DemoApi `
+        -Method POST `
+        -Path "/api/v1/processes/$($process.id)/exports/jobs" `
+        -Body @{ revision_no = $revision; format = $export.format }
+    $exportIds += [string]$job.export_id
+    $exportDeadline = [DateTime]::UtcNow.AddSeconds(45)
+    while ($job.status -in @("pending", "running")) {
+        if ([DateTime]::UtcNow -ge $exportDeadline) {
+            throw "Export job timed out: $($job.export_id)"
+        }
+        Start-Sleep -Milliseconds 250
+        $job = Invoke-DemoApi `
+            -Method GET `
+            -Path "/api/v1/processes/$($process.id)/exports/jobs/$($job.export_id)"
+    }
+    if ($job.status -ne "completed" -or [string]::IsNullOrWhiteSpace($job.download_url)) {
+        throw "Export job failed: $($job.export_id) / $($job.status) / $($job.error_code)"
+    }
     Invoke-WebRequest `
         -UseBasicParsing `
-        -Uri "$apiRoot/api/v1/processes/$($process.id)/exports" `
-        -Method POST `
+        -Uri "$apiRoot$($job.download_url)" `
+        -Method GET `
         -Headers $headers `
-        -ContentType "application/json; charset=utf-8" `
-        -Body (@{ revision_no = $revision; format = $export.format } | ConvertTo-Json -Compress) `
         -OutFile $export.path
 }
 
@@ -209,6 +226,7 @@ $summary = [ordered]@{
     node_count = $releaseDetail.graph.nodes.Count
     edge_count = $releaseDetail.graph.edges.Count
     lane_count = $releaseDetail.graph.lanes.Count
+    export_ids = $exportIds
     markdown = $markdownPath
     docx = $docxPath
 }

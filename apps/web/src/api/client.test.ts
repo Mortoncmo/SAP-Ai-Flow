@@ -180,6 +180,69 @@ describe('blueprint export client', () => {
       code: 'EXPORT_RENDER_FAILED',
     })
   })
+
+  it('creates an export job, polls completion and downloads the artifact', async () => {
+    vi.useFakeTimers()
+    try {
+      const job = {
+        export_id: 'export / 1',
+        process_id: 'process / 1',
+        revision_no: 3,
+        format: 'markdown',
+        status: 'pending',
+        filename: null,
+        content_length: null,
+        error_code: null,
+        error_message: null,
+        created_at: '2026-08-09T00:00:00Z',
+        started_at: null,
+        completed_at: null,
+        expires_at: null,
+        download_url: null,
+      }
+      const fetchMock = vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(job), {
+            status: 202,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({
+            ...job,
+            status: 'completed',
+            filename: 'SAP-Blueprint-采购流程-r3.md',
+            content_length: 128,
+            download_url: '/api/v1/processes/process%20%2F%201/exports/jobs/export%20%2F%201/download',
+          }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response('# SAP Blueprint', {
+            status: 200,
+            headers: {
+              'Content-Disposition': "attachment; filename*=UTF-8''SAP-Blueprint-%E9%87%87%E8%B4%AD%E6%B5%81%E7%A8%8B-r3.md",
+            },
+          }),
+        )
+
+      const request = exportBlueprint('process / 1', 3, 'markdown')
+      await vi.advanceTimersByTimeAsync(250)
+      const result = await request
+
+      expect(result.filename).toBe('SAP-Blueprint-采购流程-r3.md')
+      expect(result.blob.size).toBeGreaterThan(0)
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+        '/api/v1/processes/process%20%2F%201/exports/jobs',
+        '/api/v1/processes/process%20%2F%201/exports/jobs/export%20%2F%201',
+        '/api/v1/processes/process%20%2F%201/exports/jobs/export%20%2F%201/download',
+      ])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('authenticated API requests', () => {

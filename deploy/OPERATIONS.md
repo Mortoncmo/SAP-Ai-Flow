@@ -13,6 +13,21 @@ Invoke-WebRequest http://localhost:8080/health/ready
 
 `/health/ready` 返回 `200` 且 `status=ok` 后才允许写入项目。生产 API 必须先配置 OIDC、数据库和 Provider 环境变量。
 
+## 异步导出保留与恢复
+
+Markdown/Word 导出通过持久化 `export_job` 记录状态和临时文件内容。部署时显式配置：
+
+```dotenv
+EXPORT_RETENTION_HOURS=24
+EXPORT_STALE_MINUTES=5
+```
+
+- Web 创建任务后轮询 `pending | running`，仅在 `completed` 时下载；`failed` 和 `expired` 必须重新创建任务。
+- 正常运行任务通过数据库条件更新保证只被一个执行者抢占。API 进程异常退出后，`pending` 任务会在下一次状态查询时再次调度；`running` 任务超过陈旧阈值后才允许重新抢占。
+- 到期任务在查询或创建新任务触发清理时转为 `expired` 并清空二进制内容。当前实现没有独立的定时清理 Worker，低流量实例必须监控表容量；在引入受控计划清理任务前，不得把该表作为长期存储。
+- 当前执行器是 API 进程内 `BackgroundTasks`，未替代独立队列/Worker；多实例抢占、进程滚动重启和长文档容量必须在目标 PostgreSQL 环境验证。
+- 应用数据库只保存短期下载内容，不是永久文档库。正式蓝图下载后必须转存到有权限、保留期和备份策略的受控文档库。
+
 ## PostgreSQL 备份
 
 以下命令生成可读 SQL 备份；执行前确认 `.env` 中的数据库用户名和数据库名与 Compose 一致。
@@ -75,7 +90,7 @@ docker compose -f .\deploy\docker-compose.yml up -d api web
 Invoke-WebRequest http://localhost:8080/health/ready
 ```
 
-恢复后必须抽查：项目成员角色、最新修订号、发布版本不可变性、ChangeLog/GAP 决策数量、知识检索来源版本和外部模型开关。若 readiness 未通过，禁止把 Web 入口交给业务用户。
+恢复后必须抽查：项目成员角色、最新修订号、发布版本不可变性、ChangeLog/GAP 决策数量、知识检索来源版本、外部模型开关，以及未过期导出任务的状态与下载。若 readiness 未通过，禁止把 Web 入口交给业务用户。
 
 ## 故障排查
 
@@ -89,7 +104,9 @@ Invoke-WebRequest http://localhost:8080/health/ready
 | `KNOWLEDGE_UNAVAILABLE` | Chroma 卷、知识目录权限、索引版本和 API 日志 | 保留当前图；恢复索引后重试，不把无证据专业字段改为已验证 |
 | `PROVIDER_TIMEOUT` / `PROVIDER_UNAVAILABLE` | 外部模型策略、网络、限流、Provider 总时限 | 不应用迟到响应；确认当前修订未变化后重试或切回本地 Provider |
 | `RELEASE_PREFLIGHT_FAILED` | 响应中的缺失字段、上下文不一致、证据和 GAP 审计清单 | 补齐数据或顾问决策，不直接修改数据库绕过发布检查 |
-| Markdown/Word 导出失败 | API 内存、流程图完整性、字体和导出错误日志 | 当前图和修订保持可用；修复环境后对同一修订重复导出 |
+| `EXPORT_NOT_READY` | `export_id` 状态、API 进程和任务开始时间 | 保持轮询；超过陈旧阈值后再次查询以触发恢复，不直接修改任务状态 |
+| `EXPORT_RENDER_FAILED` | API 内存、流程图完整性、字体、`export_id` 和同请求号日志 | 当前图和修订保持可用；修复环境后创建新任务，不复用失败文件 |
+| `EXPORT_EXPIRED` | `expires_at`、保留配置和数据库时间 | 对同一修订创建新任务；正式交付物应从受控文档库获取 |
 
 建议按顺序收集只读诊断信息：
 
@@ -102,7 +119,7 @@ Invoke-WebRequest -UseBasicParsing http://localhost:8080/health/live
 Invoke-WebRequest -UseBasicParsing http://localhost:8080/health/ready
 ```
 
-恢复服务后通过受控 Secret 注入设置 `SAP_FLOW_ACCESS_TOKEN`，再执行 `scripts/run_acceptance_demo.ps1 -BaseUrl http://localhost:8080`，确认项目创建、两轮修改、发布和 Markdown/Word 下载全部成功。Token 不得出现在命令历史归档、日志或验收摘要中；生产故障期间生成的日志、数据库备份和验收摘要必须进入受控交付记录，不提交到 GitHub。
+恢复服务后通过受控 Secret 注入设置 `SAP_FLOW_ACCESS_TOKEN`，再执行 `scripts/run_acceptance_demo.ps1 -BaseUrl http://localhost:8080`，确认项目创建、两轮修改、发布、两个 `export_id` 完成和 Markdown/Word 下载全部成功。Token 不得出现在命令历史归档、日志或验收摘要中；生产故障期间生成的日志、数据库备份和验收摘要必须进入受控交付记录，不提交到 GitHub。
 
 ## SQLite 开发数据
 

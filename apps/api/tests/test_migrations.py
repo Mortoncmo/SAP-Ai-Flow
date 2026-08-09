@@ -26,6 +26,7 @@ def test_initial_migration_upgrades_and_downgrades_empty_sqlite(tmp_path, monkey
             "process_revision",
             "change_log",
             "gap_decision",
+            "export_job",
         }.issubset(
             set(inspect(engine).get_table_names())
         )

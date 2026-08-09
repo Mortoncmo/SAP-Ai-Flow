@@ -160,5 +160,22 @@ class ExportRequest(StrictModel):
     format: Literal["markdown", "docx"]
 
 
+class ExportJobResponse(StrictModel):
+    export_id: str
+    process_id: str
+    revision_no: int
+    format: Literal["markdown", "docx"]
+    status: Literal["pending", "running", "completed", "failed", "expired"]
+    filename: str | None
+    content_length: int | None
+    error_code: str | None
+    error_message: str | None
+    created_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+    expires_at: datetime | None
+    download_url: str | None
+
+
 class DraftCreate(StrictModel):
     source_revision: int = Field(ge=0)

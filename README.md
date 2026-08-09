@@ -18,7 +18,7 @@ SAP AI Flow 是一个面向 SAP 业务流程建模的对话式流程图工具。
 - 本地规则 Provider 和 DeepSeek Provider。
 - 项目级外部模型开关、调用前脱敏、本地回退和策略变更审计。
 - SAP MM/P2P 元数据、受控知识检索、GAP 候选与人工决策审计。
-- 项目、流程、修订、发布版本、服务端项目成员角色和 Markdown/Word 蓝图导出。
+- 项目、流程、修订、发布版本、服务端项目成员角色，以及持久化异步 Markdown/Word 蓝图导出。
 - ChromaDB 持久化知识索引、确定性字符 n-gram 向量和精确词法混合召回。
 - 开发环境身份头与生产 OIDC/JWKS Bearer JWT 验证边界。
 - FastAPI OpenAPI 文档、pytest 和 Vitest 测试。
@@ -81,6 +81,8 @@ LLM_TIMEOUT_SECONDS=10
 LLM_TOTAL_TIMEOUT_SECONDS=35
 LLM_MAX_RETRIES=2
 LLM_RETRY_BACKOFF_SECONDS=0.25
+EXPORT_RETENTION_HOURS=24
+EXPORT_STALE_MINUTES=5
 VITE_API_TIMEOUT_MS=40000
 VITE_EXPORT_TIMEOUT_MS=44000
 ```
@@ -89,7 +91,9 @@ VITE_EXPORT_TIMEOUT_MS=44000
 
 即使服务端配置了 DeepSeek，新项目仍默认使用“仅本地”策略。项目管理员可在“项目成员”弹窗中显式切换为“允许调用”；启用前界面会提示数据外发，策略变化写入项目审计。项目未启用时，持久化流程修改不会调用外部 Provider，而是回退本地规则并返回 warning。发送给 DeepSeek 的流程和指令会先脱敏客户、供应商、联系人、邮箱、电话和金额等字段。
 
-DeepSeek 单次请求默认 10 秒，最多重试 2 次，但整个 Provider 调用不会超过 35 秒。超时、网络错误、429、5xx 和结构化输出不合法可重试；认证错误和其他 4xx 立即失败。Web 普通 API 默认 40 秒超时，导出默认 44 秒，Nginx 代理为 45 秒。超时、用户取消或修订冲突不会应用迟到响应，原修改指令会保留供重试。这些 Vite 变量会写入构建产物，调整后需要重新构建 Web。
+DeepSeek 单次请求默认 10 秒，最多重试 2 次，但整个 Provider 调用不会超过 35 秒。超时、网络错误、429、5xx 和结构化输出不合法可重试；认证错误和其他 4xx 立即失败。Web 普通 API 默认 40 秒超时，异步导出的任务创建、状态轮询和下载全过程默认 44 秒，Nginx 代理为 45 秒。超时、用户取消或修订冲突不会应用迟到响应，原修改指令会保留供重试。这些 Vite 变量会写入构建产物，调整后需要重新构建 Web。
+
+Markdown/Word 下载默认先创建持久化导出任务，再每 250 毫秒查询 `export_id`，完成后下载。任务覆盖 `pending`、`running`、`completed`、`failed`、`expired` 状态；文件默认保留 24 小时，运行超过 5 分钟的任务允许恢复执行。同步导出 API 仍保留兼容，但 Web 不再使用。当前后台执行依赖 API 进程内任务，文件暂存在应用数据库，不能作为高并发任务队列或永久文档库；生产部署边界见 [deploy/OPERATIONS.md](deploy/OPERATIONS.md)。
 
 未配置时保持 `AGENT_PROVIDER=local`。本地规则引擎支持以下演示指令：
 
@@ -116,7 +120,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -BaseUrl http://127.0.0.1:8000
 ```
 
-脚本读取 `examples/mm-p2p-acceptance-demo.json`，显式按 UTF-8 发送和读取中文 JSON，并校验 7 个节点、6 条连线、5 条泳道、连线标签和发布状态。Markdown、DOCX 与 `acceptance-summary.json` 默认写入 `output/acceptance-demo`。该目录已忽略，不会把运行数据提交到仓库。
+脚本读取 `examples/mm-p2p-acceptance-demo.json`，显式按 UTF-8 发送和读取中文 JSON，并校验 7 个节点、6 条连线、5 条泳道、连线标签和发布状态。随后创建 Markdown、DOCX 两个异步任务，轮询完成并把两个 `export_id` 写入 `acceptance-summary.json`。三个产物默认写入 `output/acceptance-demo`；该目录已忽略，不会把运行数据提交到仓库。
 
 本地开发默认使用 `-UserId local-user`。对启用 OIDC 的部署环境执行时，通过受控 Secret 注入设置 `SAP_FLOW_ACCESS_TOKEN`，或显式传入 `-AccessToken`；令牌只进入 `Authorization` 请求头，不写入验收摘要。不要把令牌明文写入命令历史。
 
@@ -203,7 +207,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\browser_smoke.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\browser_smoke.ps1 -BaseUrl http://127.0.0.1:5173
 ```
 
-自动化测试默认使用本地 Provider，不会产生模型调用费用。浏览器 smoke 使用独立 Playwright CLI 会话；未提供 `-BaseUrl` 时会自动分配端口，启动当前工作区代码和 `output/browser-smoke` 下的隔离 SQLite 数据库，完成后关闭进程。它验证本地撤销/重做/自动布局/刷新恢复、节点/连线/泳道增改删、连线 Inspector 与查看者只读、泳道操作不误增节点、项目成员增改删、外部模型二次确认及审计、取消/超时/修订冲突保图和重试、纯本地 Patch P95 小于 1 秒、持久化修改/发布/历史回看/新草稿、Markdown/Word 实际下载、1440 x 900、1024 x 768、390 x 844 无横向溢出，以及控制台和页面无错误。刷新只恢复当前图，撤销/重做栈不跨刷新保留。临时运行产物位于已忽略的 `output/browser-smoke` 和 `.playwright-cli` 目录。
+自动化测试默认使用本地 Provider，不会产生模型调用费用。浏览器 smoke 使用独立 Playwright CLI 会话；未提供 `-BaseUrl` 时会自动分配端口，启动当前工作区代码和 `output/browser-smoke` 下的隔离 SQLite 数据库，完成后关闭进程。它验证本地撤销/重做/自动布局/刷新恢复、节点/连线/泳道增改删、连线 Inspector 与查看者只读、泳道操作不误增节点、项目成员增改删、外部模型二次确认及审计、取消/超时/修订冲突保图和重试、纯本地 Patch P95 小于 1 秒、持久化修改/发布/历史回看/新草稿、异步导出创建返回 `202`/`export_id`/`pending` 及 Markdown/Word 实际下载、1440 x 900、1024 x 768、390 x 844 无横向溢出，以及控制台和页面无错误。刷新只恢复当前图，撤销/重做栈不跨刷新保留。临时运行产物位于已忽略的 `output/browser-smoke` 和 `.playwright-cli` 目录。
 
 ## Docker Compose
 

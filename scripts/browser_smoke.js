@@ -72,8 +72,17 @@ async page => {
   }
 
   const downloadBlueprint = async (label, extension) => {
+    const exportJobResponsePromise = page.waitForResponse(response => (
+      response.url().endsWith('/exports/jobs')
+      && response.request().method() === 'POST'
+    ))
     const downloadPromise = page.waitForEvent('download')
     await page.getByRole('button', { name: label }).click()
+    const exportJobResponse = await exportJobResponsePromise
+    assert(exportJobResponse.status() === 202, `${label} export job returned ${exportJobResponse.status()}`)
+    const exportJob = await exportJobResponse.json()
+    assert(typeof exportJob.export_id === 'string' && exportJob.export_id.length > 0, `${label} export job has no export_id`)
+    assert(exportJob.status === 'pending', `${label} export job started as ${exportJob.status}`)
     const download = await downloadPromise
     const failure = await download.failure()
     assert(failure === null, `${label} failed: ${failure}`)
@@ -82,7 +91,7 @@ async page => {
     assert(filename.endsWith(extension), `${label} filename has the wrong extension: ${filename}`)
     const content = await readDownload(download)
     assert(content.bytes > 100, `${label} returned an unexpectedly small file: ${content.bytes}`)
-    return { filename, ...content }
+    return { filename, exportId: exportJob.export_id, ...content }
   }
 
   const submitLocalInstruction = async instruction => {

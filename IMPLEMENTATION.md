@@ -1,6 +1,6 @@
 # SAP Blueprint AI Agent 实施规格
 
-> 文档状态：整合实施与验收基线 2.9
+> 文档状态：整合实施与验收基线 3.0
 >
 > 实施状态校准：2026-08-09（以当前代码与自动化测试为准）
 >
@@ -130,7 +130,7 @@
 - DeepSeek 单次/总时限、瞬时错误分类重试和指数退避；认证及永久 4xx 不重试，Provider 错误不包含上游响应正文。
 - MM/P2P 五泳道示例，以及 SAP Inspector、证据和 GAP 候选交互。
 - 本地 `SAP_Knowledge` Markdown 语料、版本过滤、证据返回和 GAP 候选分析 API。
-- SQLAlchemy 项目、流程、修订、ChangeLog 和 GapDecision 持久化，以及 SQLite 开发适配器、Alembic 迁移和 PostgreSQL Compose 服务。
+- SQLAlchemy 项目、流程、修订、ChangeLog、GapDecision 和 ExportJob 持久化，以及 SQLite 开发适配器、Alembic 迁移和 PostgreSQL Compose 服务。
 - Repository 所有写入统一捕获数据库异常并显式回滚；一般写入故障返回不暴露底层细节的 `DATABASE_WRITE_FAILED`（503），修订唯一键冲突继续返回 `REVISION_CONFLICT`（409）。
 - `ProjectMember` 服务端成员模型、Alembic 迁移和成员管理 API；项目创建者自动成为 `project_admin`，项目角色从服务端成员记录解析。
 - 项目、流程、修订、发布、导出、GAP 和成员接口的角色门禁；非成员访问隐藏为 404，角色不足返回 403，最后一个项目管理员不能被降级或删除。
@@ -152,13 +152,14 @@
 - JSON 导入导出、PNG 和 SVG 全图导出。
 - 项目、流程、修订、发布版本和从发布版本创建草稿的 API 及前端工作流。
 - 前端 API 请求自动附带 `X-Request-ID`；流程修改请求的请求头与请求体请求号一致，便于跨端日志定位。
-- 前端普通 API 40 秒、导出 44 秒统一截止时间；用户取消保持 `AbortError`，客户端超时返回 `REQUEST_TIMEOUT`，修订冲突提示先导出 JSON，三类失败均保留当前图和原指令。
+- 前端普通 API 40 秒、异步导出创建/轮询/下载全流程 44 秒统一截止时间；用户取消保持 `AbortError`，客户端超时返回 `REQUEST_TIMEOUT`，修订冲突提示先导出 JSON，三类失败均保留当前图和原指令。
 - Markdown / Word 蓝图导出，共用 `BlueprintDocumentModel`，包含流程图、泳道、节点清单、SAP 元数据、证据和 GAP List。
 - Markdown / Word 浏览器下载支持中文流程标题、修订号和时间戳文件名；两种格式的节点、版本和 GAP 内容一致性已纳入自动化回归。
+- 持久化异步导出任务和 `export_id` 查询/下载：状态覆盖 `pending`、`running`、`completed`、`failed`、`expired`，支持数据库原子抢占、陈旧任务恢复、失败安全响应、到期内容清理和项目查看者权限校验；同步导出接口仅保留兼容用途。
 - Docker、Docker Compose、Nginx 和 GitHub Actions 基线；API 镜像已复制 `SAP_Knowledge` 和 Alembic 文件，并以非 root 用户运行。
 - 前后端自动化测试基线，以及迁移、导出结构和典型项目闭环的回归覆盖。
-- 可自行分配端口并启动当前 API、Web 和隔离 SQLite 数据库的 Playwright CLI smoke；覆盖本地撤销/重做/自动布局/刷新恢复、泳道不误增节点、成员 CRUD、外部模型二次确认与审计、取消/超时/修订冲突恢复、本地 Patch P95、持久化修改/发布/历史回看/新草稿、管理员/查看者权限、Markdown/Word 下载和三种视口。
-- 版本化 MM/P2P 验收场景和 PowerShell API 演示脚本；可重复完成项目创建、Agent 建图、连线修改、发布和双格式蓝图下载，并输出验收摘要。
+- 可自行分配端口并启动当前 API、Web 和隔离 SQLite 数据库的 Playwright CLI smoke；覆盖本地撤销/重做/自动布局/刷新恢复、泳道不误增节点、成员 CRUD、外部模型二次确认与审计、取消/超时/修订冲突恢复、本地 Patch P95、持久化修改/发布/历史回看/新草稿、管理员/查看者权限、异步 Markdown/Word 下载和三种视口。
+- 版本化 MM/P2P 验收场景和 PowerShell API 演示脚本；可重复完成项目创建、Agent 建图、连线修改、发布、创建两个持久化导出任务并下载双格式蓝图，输出包含两个 `export_id` 的验收摘要。
 
 ### 3.2 尚未完成
 
@@ -168,7 +169,7 @@
 - 具体 SSO/OIDC 身份提供方的客户端注册、真实登录/退出联调和租户级隔离尚未完成；通用 SPA PKCE 与 Bearer Token 接入已完成，`X-User-ID` 仅保留在开发环境。
 - 容器基础镜像和操作系统包漏洞扫描、集中日志采集/保留策略、告警规则和生产日志平台联调尚未完成；应用级请求/异常/审计脱敏与秘密扫描已具备自动化红线测试。
 - LangGraph 编排、Python SDK、CLI 和 BPMN 导出。
-- 异步导出任务与 `export_id` 查询尚未实现；当前 Markdown / Word 导出在请求内同步完成。
+- 当前后台导出执行仍依赖 FastAPI 进程内 `BackgroundTasks`，导出二进制暂存应用数据库；尚未引入独立任务队列、Worker 和对象存储，因此不能把当前实现视为高并发、多实例或永久文档存储方案。
 - Docker 镜像和 Compose 的真实 build/up、PostgreSQL、中文字体和干净环境验收尚未完成（当前机器无 Docker CLI）。
 - 生产备份、恢复、迁移和 readiness 操作已写入 `deploy/OPERATIONS.md`，真实卷归档与恢复演练仍需 Docker 环境。
 - 真实外部模型和 PostgreSQL 环境的并发、长尾性能、缓存命中率与容量压测尚未完成；当前只证明本地 Patch 20 次采样 P95 小于 1 秒。
@@ -178,7 +179,8 @@
 本轮已完成“数据契约 + SAP 业务上下文 + 受控知识建议 + 持久化与文档导出基础”，但仍保留生产化边界：
 
 - 已可验收：节点、连线和泳道均覆盖自然语言与画布/Inspector 增改删；连线支持 `add_edge`、`update_edge` 和 `remove_edge`，标签更新保留永久 ID 和端点，`viewer` 只能查看连线属性。
-- 已可验收：旧图无损迁移到 2.0、P2P 五泳道示例、SAP Inspector 元数据维护、证据/待确认标识、本地知识检索、项目级知识/GAP 查询权限、GAP `candidate` 输出、GAP 人工决策审计、修订冲突、发布快照复制、Markdown / Word 导出。
+- 已可验收：旧图无损迁移到 2.0、P2P 五泳道示例、SAP Inspector 元数据维护、证据/待确认标识、本地知识检索、项目级知识/GAP 查询权限、GAP `candidate` 输出、GAP 人工决策审计、修订冲突、发布快照复制、Markdown / Word 异步导出。
+- 已可验收：导出任务状态和文件内容持久化，查看者可创建、查询和下载自己有权访问流程的导出；失败、过期、跨流程查询和未完成下载返回稳定错误，默认保留 24 小时，运行超过 5 分钟的陈旧任务可重新抢占执行。
 - 已可验收：知识库故障、Provider 故障和 DOCX 渲染故障均返回安全错误，当前图和持久化修订保持可用，失败请求不新增 ChangeLog。
 - 已可验收：前端主动取消、客户端超时和 `REVISION_CONFLICT` 均不改变图或服务端修订，原指令保留；超时后直接重试可正常进入发布生命周期。
 - 已完成典型闭环：创建项目 → 创建流程 → AI 生成流程 → 保存修订 → 发布版本 → 从发布版本创建新草稿 → 历史修订只读回看。
@@ -188,17 +190,17 @@
 
 ### 3.4 本轮验证记录（2026-08-09）
 
-- 后端 `ruff check app tests alembic` 通过，pytest 76 项通过，包含版本化验收场景完整 API 闭环、`update_edge` 有效/非法/重复/原子回滚、自然语言连线增改删及重复/缺失/歧义错误，以及 DeepSeek 时限/重试、角色门禁、发布 GAP 审计、JWT、知识评估、证据门禁、外部模型策略、日志脱敏、数据库事务回滚和依赖/导出失败保图。
+- 后端 `ruff check app tests alembic` 通过，pytest 79 项通过，包含版本化验收场景完整 API 闭环、异步导出持久化/下载/过期/失败/权限与迁移、`update_edge` 有效/非法/重复/原子回滚、自然语言连线增改删及重复/缺失/歧义错误，以及 DeepSeek 时限/重试、角色门禁、发布 GAP 审计、JWT、知识评估、证据门禁、外部模型策略、日志脱敏、数据库事务回滚和依赖/导出失败保图。
 - 依赖/导出失败回归通过：知识服务和 Provider 故障分别返回稳定错误；DOCX 渲染故障返回通用 500；三类失败后当前流程仍为修订 0，修订表与 ChangeLog 无新增记录。
 - SQLite 故障注入在 `ChangeLog` INSERT 阶段抛出 `OperationalError`，验证 API 返回安全的 `DATABASE_WRITE_FAILED`（503）并保留请求号；重新打开 Session 后流程修订号、修订表和 ChangeLog 均无部分更新。
-- 前端 Vitest 29 项、TypeScript typecheck 和 production build 通过；覆盖统一客户端超时、显式取消，以及成员 API、项目策略、导出文件名、导出失败错误、OIDC 配置、同源回调、防开放跳转、登录/退出回调和 Bearer Token 请求头。
-- Alembic SQLite 升级/回滚、旧项目成员安全回填、DOCX 结构审计、表格 geometry、图片和标题层级审计通过。
+- 前端 Vitest 30 项、TypeScript typecheck 和 production build 通过；覆盖异步导出创建、轮询、下载、统一截止时间、显式取消，以及成员 API、项目策略、导出文件名、导出失败错误、OIDC 配置、同源回调、防开放跳转、登录/退出回调和 Bearer Token 请求头。
+- Alembic SQLite 升级/回滚、`export_job` 迁移、旧项目成员安全回填、DOCX 结构审计、表格 geometry、图片和标题层级审计通过。
 - 仓库内 Playwright CLI smoke 默认自动分配端口并启动当前 API、Web 和隔离 SQLite 测试库，不依赖已运行的开发进程。它已完成自然语言连线新增、标签修改和删除，以及画布连线 Inspector 标签保存和删除；三类操作均验证节点、泳道不变，连线永久 ID 和端点在标签更新时保持不变，`viewer` 可查看但不能编辑、删除或使用键盘删除连线。
-- 同一 smoke 已完成持久化自然语言修改、发布只读、新草稿、历史回看、成员 CRUD、外部模型开关、Markdown / Word 下载、取消/超时/409 恢复、泳道不误增节点、撤销/重做/布局/刷新恢复和 20 次本地 Patch P95 小于 1 秒；1440 x 900、1024 x 768 和 390 x 844 页面宽度正常，移动端成员弹窗无横向溢出，控制台与页面均为 0 error。
+- 同一 smoke 已完成持久化自然语言修改、发布只读、新草稿、历史回看、成员 CRUD、外部模型开关、异步 Markdown / Word 下载、取消/超时/409 恢复、泳道不误增节点、撤销/重做/布局/刷新恢复和 20 次本地 Patch P95 小于 1 秒；1440 x 900、1024 x 768 和 390 x 844 页面宽度正常，移动端成员弹窗无横向溢出，控制台与页面均为 0 error。
 - OIDC 本切片浏览器验收覆盖未配置兼容模式和“已配置但未登录”模式：登录入口可见，项目选择与新建项目被禁用，390 x 844 和 1024 x 768 页面/页头 `scrollWidth` 均等于视口宽度，登录图标宽度稳定为 35 px，控制台无 error。真实 IdP 跳转与回调仍待目标环境联调。
 - `pip-audit` 在升级 Pillow 12.3.0 后无可修复漏洞；ChromaDB `PYSEC-2026-311` 因项目未暴露 Chroma HTTP API 而按 `SECURITY.md` 限定例外并设 2026-09-09 复核日。`npm audit --omit=dev` 为 0 漏洞，生产源码/前端构建秘密扫描通过。
-- `scripts/browser_smoke.ps1` 与 `scripts/browser_smoke.js` 已固化本地历史/恢复、泳道、连线双入口增改删、成员 CRUD、外部模型策略、取消/超时/冲突恢复、本地 P95、持久化发布生命周期、管理员/查看者权限、实际下载和三视口回归；还需在真实外部模型/PostgreSQL 环境扩展并发、长尾与容量测试。
-- `scripts/run_acceptance_demo.ps1` 已在独立 FastAPI 进程和隔离 SQLite 数据库中实跑通过，发布修订 2 / Release 1，并生成内容有效的 Markdown、DOCX 和 JSON 摘要；Windows PowerShell 5 的中文请求/响应已使用显式 UTF-8 字节和流解码验证。
+- `scripts/browser_smoke.ps1` 与 `scripts/browser_smoke.js` 已固化本地历史/恢复、泳道、连线双入口增改删、成员 CRUD、外部模型策略、取消/超时/冲突恢复、本地 P95、持久化发布生命周期、管理员/查看者权限、异步任务 `202`/`export_id`/`pending` 与实际下载，以及三视口回归；还需在真实外部模型/PostgreSQL 环境扩展并发、长尾与容量测试。
+- `scripts/run_acceptance_demo.ps1` 已在独立 FastAPI 进程和隔离 SQLite 数据库中实跑通过，发布修订 2 / Release 1，创建两个持久化 `export_id`，并生成内容有效的 Markdown、DOCX 和 JSON 摘要；Windows PowerShell 5 的中文请求/响应已使用显式 UTF-8 字节和流解码验证。
 - 当前环境没有 LibreOffice/`soffice`，DOCX 尚未完成 PNG 级视觉渲染；当前环境没有 Docker CLI，Compose 尚未完成真实 build/up 验收。
 
 ### 3.5 基线迁移原则
@@ -418,6 +420,7 @@ GAP 至少包含：
 | `ChangeLog` | 用户输入、规范化 Patch、决策摘要、证据和执行指标 |
 | `KnowledgeSource` | 知识文件来源、版本、授权和审核状态 |
 | `GapDecision` | GAP 候选的确认、驳回和解决记录 |
+| `ExportJob` | 指定修订的异步文档导出状态、文件元数据、临时内容和保留期限 |
 
 ### 7.2 推荐关系模型
 
@@ -449,6 +452,11 @@ change_log
 gap_decision
   id, process_id, node_id, revision_no, from_status, to_status,
   comment, decided_by, decided_at
+
+export_job
+  id, process_id, revision_no, format, status, filename, media_type,
+  content BYTEA, content_length, error_code, error_message, created_by,
+  created_at, started_at, completed_at, expires_at
 ```
 
 约束：
@@ -462,6 +470,7 @@ gap_decision
 - ChangeLog 不保存 `ai_reasoning`，只保存 `decision_summary`。
 - `external_model_enabled` 默认 `false`；只允许项目管理员修改，修改与未修改结果均不得由客户端身份字段伪造操作者。
 - 项目审计记录不存储模型内部推理、认证头、密钥或未脱敏业务正文。
+- `export_job` 只保存指定修订生成的临时交付物；默认 24 小时后转为 `expired` 并清空二进制内容，不能作为正式文档归档库。
 
 ### 7.3 两类版本
 
@@ -696,10 +705,15 @@ GET  /api/v1/processes/{process_id}/revisions/{revision_no}
 POST /api/v1/processes/{process_id}/releases
 GET  /api/v1/processes/{process_id}/releases/{release_no}
 POST /api/v1/processes/{process_id}/drafts
-POST /api/v1/processes/{process_id}/exports  # 当前同步返回 Markdown 或 DOCX
+POST /api/v1/processes/{process_id}/exports                         # 同步兼容接口
+POST /api/v1/processes/{process_id}/exports/jobs                    # 创建异步任务，返回 202
+GET  /api/v1/processes/{process_id}/exports/jobs/{export_id}        # 查询持久化状态
+GET  /api/v1/processes/{process_id}/exports/jobs/{export_id}/download
 ```
 
-当导出耗时超过同步请求门槛后，再增加异步 `export_id` 任务和状态查询；该能力不属于当前已完成接口。
+Web 默认创建异步任务并每 250 毫秒轮询状态，任务完成后再下载文件；同步 `/exports` 仅用于向后兼容。任务状态为 `pending | running | completed | failed | expired`，只有 `completed` 可下载。默认 `EXPORT_RETENTION_HOURS=24`，超过保留期后返回 `EXPORT_EXPIRED`（410）并清空文件内容；默认 `EXPORT_STALE_MINUTES=5`，超过该时限仍处于运行态的任务允许通过数据库条件更新重新抢占，避免重复执行正常任务。
+
+三个异步接口均按流程所属项目执行至少 `viewer` 权限校验，并校验 `process_id` 与 `export_id` 的归属关系。渲染失败只持久化稳定错误码和通用文案，不保存或返回底层异常正文。
 
 发布前必须检查：
 
@@ -729,7 +743,7 @@ POST /api/v1/processes/{process_id}/exports  # 当前同步返回 Markdown 或 D
 
 数据库写入故障统一返回 `DATABASE_WRITE_FAILED`（503），响应只包含稳定业务文案和请求号，不返回 SQL、连接信息或驱动异常正文。修订唯一键竞争仍返回 `REVISION_CONFLICT`（409），以便前端提示刷新而不是按临时故障重试。
 
-Web 对普通 API 使用 40 秒截止时间，对同步导出使用 44 秒截止时间，Nginx 读写代理时限为 45 秒。客户端截止时返回 `REQUEST_TIMEOUT`，不得把用户主动取消转换成超时，也不得应用取消或超时后的迟到响应。
+Web 对普通 API 使用 40 秒截止时间，对异步导出的创建、轮询和下载全过程使用 44 秒统一截止时间，Nginx 读写代理时限为 45 秒。客户端截止时返回 `REQUEST_TIMEOUT`，不得把用户主动取消转换成超时，也不得应用取消或超时后的迟到响应。
 
 ## 11. 前端实施
 
@@ -800,6 +814,7 @@ dirty                是否有未保存修改
 - 1.0 导入时补充空 SAP 元数据和默认 SAP Context，再保存为 2.0。
 - PNG、SVG 继续覆盖全部节点和泳道，不依赖当前视口。
 - 文件名包含安全化流程标题、发布版本或修订号和时间戳。
+- Markdown、Word 下载默认使用持久化异步任务；界面不得把任务创建成功误报为文件已经生成。
 
 ## 12. 蓝图文档导出
 
@@ -827,7 +842,9 @@ Markdown 和 Word 必须由同一个 `BlueprintDocumentModel` 生成，禁止两
 - Markdown 先作为结构和内容基线；Word 使用 `python-docx` 套用同一内容模型。
 - Word 模板支持页眉、页脚、客户名称、版本和 GAP 表格，不把客户品牌写死在代码中。
 - 导出时未确认元数据和 GAP 必须保留“待确认/候选”标识。
-- 导出任务超过同步超时后改为后台任务，并通过 `export_id` 查询状态。
+- Web 创建任务后通过 `export_id` 轮询，只有 `completed` 状态返回下载地址；`failed`、`expired` 和超时分别显示稳定错误并允许重新创建任务。
+- 后台任务必须先通过数据库条件更新抢占执行权；正常 `running` 任务不得重复渲染，超过陈旧阈值后才允许恢复。
+- 默认保留导出文件 24 小时，到期后清空二进制内容；应用数据库不是正式文档归档或对象存储。
 
 ### 12.3 验收要求
 
@@ -835,6 +852,7 @@ Markdown 和 Word 必须由同一个 `BlueprintDocumentModel` 生成，禁止两
 - 文档中每个 AI 生成的专业结论都能定位到证据或明确标记待确认。
 - 1440 x 900 画布中的典型 P2P 流程导出后文字清晰、泳道完整、无裁切。
 - 相同发布版本重复导出时业务内容一致。
+- 创建、轮询、下载、失败、过期、陈旧恢复和跨项目/跨流程权限路径均有自动化回归。
 
 ## 13. 安全、权限与审计
 
@@ -868,6 +886,7 @@ V1.0 至少定义以下角色：
 - API Key 仅存在于后端运行环境，不进入前端包、日志和镜像层。
 - 知识库必须记录版权或授权状态，未批准来源不进入生产索引。
 - 审计记录包含操作者、动作、对象、修订、结果和时间，不包含思维链。
+- 导出文件只按配置的短期保留窗口暂存在应用数据库；过期任务必须清除内容，正式交付物由部署方转存到受控文档库。
 
 ### 13.3 基础防护
 
@@ -999,6 +1018,7 @@ V1.0 至少定义以下角色：
 - [x] 实现 Project、Process、ProcessRevision、ChangeLog 和 GapDecision。
 - [x] 实现事务保存和 `base_revision` 并发控制基础。
 - [x] 统一数据库写入失败回滚和安全 503 响应，并以 ChangeLog INSERT 故障注入验证无部分修订。
+- [x] 新增 `export_job` 持久化模型和 0005 Alembic 迁移，完成 SQLite 升级/回滚覆盖。
 - [x] 更新 Docker Compose，增加 PostgreSQL。
 - [x] 完成 Alembic SQLite 升级/回滚测试。
 - [ ] 完成 PostgreSQL 迁移、备份和恢复测试。
@@ -1048,11 +1068,12 @@ V1.0 至少定义以下角色：
 
 - [x] 基于 `python-docx` 实现 Word 模板。
 - [x] 加入页眉、页脚、版本、流程图和表格。
-- [ ] 实现异步模板导出任务状态（当前同步响应）。
+- [x] 实现持久化异步导出任务、`export_id` 状态查询、失败/过期处理、陈旧任务恢复和下载接口。
+- [x] 前端接入任务创建、250 毫秒轮询和完成后下载，并保持 44 秒统一截止时间和显式取消语义。
 - [ ] 验证中文字体、分页、长表格和图片清晰度。
 - [x] 对比 Word 与 Markdown 共用内容模型的结构。
 
-退出标准：Word 与 Markdown 节点、GAP、引用和版本数据一致，无明显排版缺陷；结构审计已通过，中文字体和分页的 PNG 视觉验收待有 `soffice` 的环境完成。
+退出标准：Word 与 Markdown 节点、GAP、引用和版本数据一致；异步任务的持久化、状态、权限、过期和下载回归已通过。结构审计已通过，中文字体和分页的 PNG 视觉验收待有 `soffice` 的环境完成，因此 Word 的生产排版验收仍未关闭。
 
 ### Week 11：LangGraph、评估与性能
 
@@ -1068,7 +1089,7 @@ V1.0 至少定义以下角色：
 
 ### Week 12：交付与验收
 
-- [x] 完成本地历史/恢复、泳道、成员、外部模型策略、故障恢复、持久化发布生命周期、查看者权限、蓝图下载和三视口的仓库内 Playwright 验收。
+- [x] 完成本地历史/恢复、泳道、成员、外部模型策略、故障恢复、持久化发布生命周期、查看者权限、异步蓝图下载和三视口的仓库内 Playwright 验收。
 - [ ] 完成 Docker 和部署验收。
 - [x] 完成数据库迁移、备份恢复和故障排查文档；真实 PostgreSQL 演练仍由 Week 6 独立验收项跟踪。
 - [x] 完成应用依赖、生产源码、前端构建和外部模型数据流安全检查；ChromaDB 无修复版公告按限定攻击面登记复核。
@@ -1110,6 +1131,7 @@ V1.0 至少定义以下角色：
 - [x] GAP 只能由顾问确认。
 - [x] 项目、流程、修订和发布版本可完整追溯。
 - [x] Markdown 与 Word 蓝图内容一致。
+- [x] Markdown 与 Word 可通过持久化 `export_id` 查询状态并在完成后下载，失败或过期时返回稳定错误。
 
 ### 稳定性与安全
 
@@ -1121,12 +1143,12 @@ V1.0 至少定义以下角色：
 
 ## 18. 下一开发切片
 
-基础契约、流程编辑、持久化、版本工作流、服务端项目成员角色、项目级知识/GAP 查询、发布 GAP 审计和同步文档导出已经落地。连线双入口增改删已完成代码、契约、权限和浏览器验收；后续进入依赖外部环境或业务签字的生产验收：
+基础契约、流程编辑、持久化、版本工作流、服务端项目成员角色、项目级知识/GAP 查询、发布 GAP 审计和持久化异步文档导出已经落地。连线双入口增改删与导出任务创建/轮询/下载已完成代码、契约、权限和本地自动化验收；后续进入依赖外部环境、部署架构或业务签字的生产验收：
 
 1. 在目标 SSO/OIDC 身份提供方登记 SPA 客户端、回调地址和 API audience，完成真实登录、退出、Token 刷新/过期及部署联调；通用 Authorization Code + PKCE、Bearer Token 注入和应用日志治理已完成。
 2. 完成知识来源/授权顾问审核、正式标注集和生产语义嵌入模型对比；ChromaDB 持久化、离线混合召回和固定自动化评估集已完成。
-3. 在真实外部模型/PostgreSQL 环境完成并发、长尾和容量测试，并在具备 LibreOffice 的环境完成 DOCX 视觉渲染；本地历史、恢复、故障和性能 smoke 已完成。
-4. 更新部署说明，在具备 Docker 与 LibreOffice 的环境完成 PostgreSQL、Compose、中文字体、迁移、备份恢复和文档渲染验收。
-5. Tool 契约、真实认证和向量检索稳定后再接入 LangGraph；Python SDK、CLI 和 BPMN 保持后续优先级。
+3. 在真实外部模型/PostgreSQL 环境完成并发、长尾和容量测试；同时验证多实例下导出任务抢占与陈旧恢复，并决定生产环境采用独立队列/Worker 和对象存储还是限制为单实例低并发部署。
+4. 在具备 Docker 与 LibreOffice 的环境完成 PostgreSQL、Compose、中文字体、迁移、备份恢复和 DOCX 视觉渲染验收；应用数据库中的导出二进制不得被当作永久交付物存储。
+5. Tool 契约、真实认证和向量检索稳定后再评估 LangGraph；Python SDK、CLI 和 BPMN 保持后续优先级。
 
 当前本机可执行的最终流程编辑验收项已全部完成。生产验收剩余门槛是具体身份提供方、知识授权与顾问签字、集中日志、真实 PostgreSQL/外部模型、LibreOffice 和 Docker 部署联调；这些项目未验证前不得宣称生产验收完成。

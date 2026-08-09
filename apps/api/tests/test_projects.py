@@ -1,6 +1,7 @@
 import json
 import re
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import unquote
@@ -19,6 +20,7 @@ from app.core.errors import FlowchartError, ProviderError
 from app.db.database import Database
 from app.db.models import (
     ChangeLogRecord,
+    ExportJobRecord,
     GapDecisionRecord,
     ProcessRecord,
     ProcessRevisionRecord,
@@ -1024,3 +1026,130 @@ def test_versioned_acceptance_demo_completes_release_and_exports(persistence_cli
     assert scenario["process"]["name"] in markdown.text
     assert docx.status_code == 200, docx.text
     assert docx.content[:2] == b"PK"
+
+
+def test_async_export_job_persists_status_download_and_expiration(persistence_client):
+    client, database = persistence_client
+    process_id = _create_process(client)
+    modified = client.post(
+        f"/api/v1/processes/{process_id}/modify",
+        json={
+            "request_id": "async-export-source",
+            "base_revision": 0,
+            "instruction": "创建直接物料 P2P 流程",
+        },
+    )
+    assert modified.status_code == 200, modified.text
+
+    created = client.post(
+        f"/api/v1/processes/{process_id}/exports/jobs",
+        json={"revision_no": 1, "format": "markdown"},
+    )
+    assert created.status_code == 202, created.text
+    assert created.json()["status"] == "pending"
+    export_id = created.json()["export_id"]
+
+    status = client.get(f"/api/v1/processes/{process_id}/exports/jobs/{export_id}")
+    assert status.status_code == 200, status.text
+    payload = status.json()
+    assert payload["status"] == "completed"
+    assert payload["filename"].endswith(".md")
+    assert payload["content_length"] > 100
+    assert payload["download_url"].endswith(f"/{export_id}/download")
+
+    download = client.get(payload["download_url"])
+    assert download.status_code == 200, download.text
+    assert "## 3. 流程步骤" in download.text
+
+    session = database.session_factory()
+    try:
+        job = session.get(ExportJobRecord, export_id)
+        assert job is not None
+        assert job.content == download.content
+        job.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.commit()
+    finally:
+        session.close()
+
+    expired = client.get(f"/api/v1/processes/{process_id}/exports/jobs/{export_id}")
+    assert expired.status_code == 200, expired.text
+    assert expired.json()["status"] == "expired"
+    assert expired.json()["content_length"] is None
+    assert expired.json()["download_url"] is None
+    expired_download = client.get(
+        f"/api/v1/processes/{process_id}/exports/jobs/{export_id}/download"
+    )
+    assert expired_download.status_code == 410
+    assert expired_download.json()["error"]["code"] == "EXPORT_EXPIRED"
+
+
+def test_async_export_failure_is_safe_and_query_is_process_scoped(
+    persistence_client, monkeypatch
+):
+    client, _ = persistence_client
+    process_id = _create_process(client)
+
+    def explode_docx(_model):
+        raise RuntimeError("sensitive renderer details")
+
+    monkeypatch.setattr(projects_route, "render_docx", explode_docx)
+    created = client.post(
+        f"/api/v1/processes/{process_id}/exports/jobs",
+        json={"revision_no": 0, "format": "docx"},
+    )
+    assert created.status_code == 202, created.text
+    export_id = created.json()["export_id"]
+
+    status = client.get(f"/api/v1/processes/{process_id}/exports/jobs/{export_id}")
+    assert status.status_code == 200, status.text
+    assert status.json()["status"] == "failed"
+    assert status.json()["error_code"] == "EXPORT_RENDER_FAILED"
+    assert "sensitive" not in status.text
+
+    failed_download = client.get(
+        f"/api/v1/processes/{process_id}/exports/jobs/{export_id}/download"
+    )
+    assert failed_download.status_code == 409
+    assert failed_download.json()["error"]["code"] == "EXPORT_RENDER_FAILED"
+    assert "sensitive" not in failed_download.text
+
+    other_process_id = _create_process(client)
+    hidden = client.get(
+        f"/api/v1/processes/{other_process_id}/exports/jobs/{export_id}"
+    )
+    assert hidden.status_code == 404
+    assert hidden.json()["error"]["code"] == "EXPORT_NOT_FOUND"
+
+
+def test_stale_async_export_is_reclaimed_on_status_query(persistence_client):
+    client, database = persistence_client
+    process_id = _create_process(client)
+    session = database.session_factory()
+    try:
+        session.add(
+            ExportJobRecord(
+                id="export-stale",
+                process_id=process_id,
+                revision_no=0,
+                format="markdown",
+                status="running",
+                created_by="local-user",
+                started_at=datetime.now(UTC) - timedelta(minutes=10),
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    first = client.get(
+        f"/api/v1/processes/{process_id}/exports/jobs/export-stale"
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["status"] == "running"
+
+    completed = client.get(
+        f"/api/v1/processes/{process_id}/exports/jobs/export-stale"
+    )
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["status"] == "completed"
+    assert completed.json()["download_url"].endswith("/export-stale/download")

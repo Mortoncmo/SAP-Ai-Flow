@@ -1,10 +1,13 @@
-from sqlalchemy import func, select
+from datetime import UTC, timedelta
+
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.errors import FlowchartError
 from app.db.models import (
     ChangeLogRecord,
+    ExportJobRecord,
     GapDecisionRecord,
     ProcessRecord,
     ProcessRevisionRecord,
@@ -629,6 +632,133 @@ class BlueprintRepository:
             self.session.rollback()
             self._raise_database_write_failed(exc)
         return decision
+
+    def create_export_job(
+        self,
+        *,
+        process_id: str,
+        revision_no: int,
+        format: str,
+        user_id: str,
+    ) -> ExportJobRecord:
+        self.expire_export_jobs()
+        job = ExportJobRecord(
+            id=new_id("export"),
+            process_id=process_id,
+            revision_no=revision_no,
+            format=format,
+            status="pending",
+            created_by=user_id,
+        )
+        self.session.add(job)
+        self._commit()
+        return job
+
+    def require_export_job(self, process_id: str, export_id: str) -> ExportJobRecord:
+        job = self.require_export_job_unscoped(export_id)
+        if job.process_id != process_id:
+            raise FlowchartError(
+                "EXPORT_NOT_FOUND",
+                "导出任务不存在。",
+                status_code=404,
+                details={"export_id": export_id},
+            )
+        if job.status == "completed" and self._export_job_expired(job):
+            job.status = "expired"
+            job.content = None
+            job.content_length = None
+            self._commit()
+        return job
+
+    def require_export_job_unscoped(self, export_id: str) -> ExportJobRecord:
+        job = self.session.get(ExportJobRecord, export_id)
+        if job is None:
+            raise FlowchartError(
+                "EXPORT_NOT_FOUND",
+                "导出任务不存在。",
+                status_code=404,
+                details={"export_id": export_id},
+            )
+        return job
+
+    def claim_export_job(self, export_id: str, *, stale_minutes: int) -> bool:
+        now = utc_now()
+        stale_before = now - timedelta(minutes=stale_minutes)
+        result = self.session.execute(
+            update(ExportJobRecord)
+            .where(
+                ExportJobRecord.id == export_id,
+                or_(
+                    ExportJobRecord.status == "pending",
+                    and_(
+                        ExportJobRecord.status == "running",
+                        ExportJobRecord.started_at < stale_before,
+                    ),
+                ),
+            )
+            .values(
+                status="running",
+                started_at=now,
+                completed_at=None,
+                expires_at=None,
+                error_code=None,
+                error_message=None,
+            )
+        )
+        self._commit()
+        return bool(result.rowcount)
+
+    def expire_export_jobs(self) -> None:
+        self.session.execute(
+            update(ExportJobRecord)
+            .where(
+                ExportJobRecord.status == "completed",
+                ExportJobRecord.expires_at <= utc_now(),
+            )
+            .values(status="expired", content=None, content_length=None)
+        )
+        self._commit()
+
+    def complete_export_job(
+        self,
+        *,
+        job: ExportJobRecord,
+        filename: str,
+        fallback_filename: str,
+        media_type: str,
+        content: bytes,
+        retention_hours: int,
+    ) -> None:
+        completed_at = utc_now()
+        job.status = "completed"
+        job.filename = filename
+        job.fallback_filename = fallback_filename
+        job.media_type = media_type
+        job.content = content
+        job.content_length = len(content)
+        job.error_code = None
+        job.error_message = None
+        job.completed_at = completed_at
+        job.expires_at = completed_at + timedelta(hours=retention_hours)
+        self._commit()
+
+    def fail_export_job(self, job: ExportJobRecord) -> None:
+        job.status = "failed"
+        job.content = None
+        job.content_length = None
+        job.error_code = "EXPORT_RENDER_FAILED"
+        job.error_message = "蓝图渲染失败，请稍后重试。"
+        job.completed_at = utc_now()
+        self._commit()
+
+    @staticmethod
+    def _export_job_expired(job: ExportJobRecord) -> bool:
+        if job.expires_at is None:
+            return False
+        expires_at = job.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        return expires_at <= utc_now()
 
     def _flush(self) -> None:
         try:
