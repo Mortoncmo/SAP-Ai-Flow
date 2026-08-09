@@ -8,6 +8,8 @@ from urllib.parse import unquote
 
 import pytest
 from docx import Document
+from docx.enum.section import WD_ORIENT
+from docx.shared import Inches
 from fastapi.testclient import TestClient
 from sqlalchemy import event, func, select
 from sqlalchemy.exc import OperationalError
@@ -514,6 +516,14 @@ def test_persisted_modify_revision_release_and_changelog(persistence_client):
     assert docx_export.status_code == 200, docx_export.text
     assert docx_export.content.startswith(b"PK")
     document = Document(BytesIO(docx_export.content))
+    assert len(document.sections) == 3
+    assert [section.orientation for section in document.sections] == [
+        WD_ORIENT.PORTRAIT,
+        WD_ORIENT.LANDSCAPE,
+        WD_ORIENT.PORTRAIT,
+    ]
+    assert len(document.inline_shapes) == 1
+    assert document.inline_shapes[0].width == Inches(9.5)
     document_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
     assert "流程步骤" in document_text
     assert any("ME21N" in cell.text for table in document.tables for row in table.rows for cell in row.cells)

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from docx import Document
 from docx.document import Document as DocumentType
-from docx.enum.section import WD_ORIENT
+from docx.enum.section import WD_ORIENT, WD_SECTION
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
@@ -72,7 +72,7 @@ def render_markdown(model: BlueprintDocumentModel) -> str:
                     str(index),
                     _md(lane_labels.get(node.lane_id or "", "未分配")),
                     _md(node.label),
-                    _md(node.sap.step_type or node.type),
+                    _md(_step_type(node.sap.step_type or node.type)),
                     _md(", ".join(item.code for item in node.sap.tcodes) or "-"),
                     _md(", ".join(node.sap.roles) or "-"),
                     _md(_metadata_summary(node)),
@@ -149,12 +149,15 @@ def render_docx(model: BlueprintDocumentModel) -> bytes:
     _configure_document(document, model)
     _add_title_block(document, model)
     _add_project_section(document, model)
+
+    diagram_section = document.add_section(WD_SECTION.NEW_PAGE)
+    _configure_page_section(diagram_section, landscape=True)
     _add_heading(document, "2. 流程图", level=1)
     diagram = render_graph_png(model.graph)
     paragraph = document.add_paragraph()
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     paragraph.paragraph_format.space_after = Pt(8)
-    picture = paragraph.add_run().add_picture(diagram, width=Inches(6.5))
+    picture = paragraph.add_run().add_picture(diagram, width=Inches(9.5))
     picture._inline.docPr.set("descr", "SAP 业务流程及泳道图")
     picture._inline.docPr.set("title", "业务流程图")
     caption = document.add_paragraph("图 1  业务流程及泳道")
@@ -163,6 +166,8 @@ def render_docx(model: BlueprintDocumentModel) -> bytes:
     for run in caption.runs:
         _set_run_font(run, size=9, color="68716B")
 
+    steps_section = document.add_section(WD_SECTION.NEW_PAGE)
+    _configure_page_section(steps_section, landscape=False)
     _add_steps_section(document, model.graph)
     _add_evidence_section(document, model.graph)
     _add_gaps_section(document, model.graph)
@@ -193,25 +198,25 @@ def render_graph_png(graph: GraphDocument) -> BytesIO:
     }
     node_order = {node.id: index for index, node in enumerate(graph.nodes)}
     width = max(1400, 300 + max(len(graph.nodes), 1) * 230)
-    height = max(420, 86 + len(lane_entries) * 178)
+    height = max(420, 86 + len(lane_entries) * 210)
     image = Image.new("RGB", (width, height), "#F7F7F4")
     draw = ImageDraw.Draw(image)
-    font = _font(25)
-    small_font = _font(20)
+    font = _font(32)
+    small_font = _font(28)
     centers: dict[str, tuple[int, int]] = {}
     boxes: dict[str, tuple[int, int, int, int]] = {}
 
     for lane_index, (lane_id, label, color) in enumerate(lane_entries):
-        top = 56 + lane_index * 178
-        bottom = top + 158
+        top = 56 + lane_index * 210
+        bottom = top + 188
         draw.rounded_rectangle((22, top, width - 22, bottom), radius=8, fill="#FFFFFF", outline=color, width=3)
         draw.rectangle((22, top, 210, bottom), fill=_blend(color, 0.13), outline=color, width=2)
         draw.multiline_text((42, top + 53), _wrap(label, 7), font=font, fill="#26322B", spacing=4)
         nodes = grouped[lane_id]
         for node in nodes:
             x = 245 + node_order[node.id] * 230
-            y = top + 39
-            box = (x, y, x + 178, y + 80)
+            y = top + 36
+            box = (x, y, x + 178, y + 120)
             boxes[node.id] = box
             centers[node.id] = ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2)
 
@@ -246,7 +251,7 @@ def render_graph_png(graph: GraphDocument) -> BytesIO:
             spacing=3,
         )
         if node.sap.tcodes:
-            draw.text((box[0] + 7, box[3] - 18), node.sap.tcodes[0].code, font=_font(14), fill="#52796F")
+            draw.text((box[0] + 7, box[3] - 25), node.sap.tcodes[0].code, font=_font(20), fill="#52796F")
 
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)
@@ -256,15 +261,7 @@ def render_graph_png(graph: GraphDocument) -> BytesIO:
 
 def _configure_document(document: DocumentType, model: BlueprintDocumentModel) -> None:
     section = document.sections[0]
-    section.orientation = WD_ORIENT.PORTRAIT
-    section.page_width = Inches(8.5)
-    section.page_height = Inches(11)
-    section.top_margin = Inches(1)
-    section.right_margin = Inches(1)
-    section.bottom_margin = Inches(1)
-    section.left_margin = Inches(1)
-    section.header_distance = Inches(0.492)
-    section.footer_distance = Inches(0.492)
+    _configure_page_section(section, landscape=False)
 
     styles = document.styles
     normal = styles["Normal"]
@@ -297,6 +294,19 @@ def _configure_document(document: DocumentType, model: BlueprintDocumentModel) -
     footer.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     _set_run_font(footer.add_run(f"{model.process_name} | "), size=8.5, color="68716B")
     _append_page_field(footer)
+
+
+def _configure_page_section(section, *, landscape: bool) -> None:
+    section.orientation = WD_ORIENT.LANDSCAPE if landscape else WD_ORIENT.PORTRAIT
+    section.page_width = Inches(11 if landscape else 8.5)
+    section.page_height = Inches(8.5 if landscape else 11)
+    margin = 0.75 if landscape else 1
+    section.top_margin = Inches(margin)
+    section.right_margin = Inches(margin)
+    section.bottom_margin = Inches(margin)
+    section.left_margin = Inches(margin)
+    section.header_distance = Inches(0.4 if landscape else 0.492)
+    section.footer_distance = Inches(0.4 if landscape else 0.492)
 
 
 def _add_title_block(document: DocumentType, model: BlueprintDocumentModel) -> None:
@@ -358,7 +368,7 @@ def _add_steps_section(document: DocumentType, graph: GraphDocument) -> None:
             str(index),
             lane_labels.get(node.lane_id or "", "未分配"),
             node.label,
-            str(node.sap.step_type or node.type),
+            _step_type(node.sap.step_type or node.type),
             ", ".join(item.code for item in node.sap.tcodes) or "-",
             (", ".join(node.sap.roles) or "-") + f"\n{_metadata_summary(node)}",
         ]
@@ -642,6 +652,21 @@ def _gap_status(status: object) -> str:
         "resolved": "已解决",
         "none": "无 GAP",
     }.get(str(status), str(status))
+
+
+def _step_type(step_type: object) -> str:
+    return {
+        "start": "开始",
+        "end": "结束",
+        "task": "任务",
+        "decision": "判断",
+        "subprocess": "子流程",
+        "transaction": "事务",
+        "approval": "审批",
+        "validation": "校验",
+        "manual": "人工",
+        "integration": "集成",
+    }.get(str(step_type), str(step_type))
 
 
 def _md(value: object) -> str:

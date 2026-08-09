@@ -249,8 +249,12 @@ def _audit_page(path: Path) -> dict[str, object]:
     if width < 800 or height < 1000:
         raise RuntimeError(f"Rendered page is unexpectedly small: {path.name} = {width}x{height}")
     ratio = width / height
-    if not 0.74 <= ratio <= 0.80:
-        raise RuntimeError(f"Rendered page is not Letter portrait: {path.name} ratio={ratio:.3f}")
+    if 0.74 <= ratio <= 0.80:
+        orientation = "portrait"
+    elif 1.25 <= ratio <= 1.36:
+        orientation = "landscape"
+    else:
+        raise RuntimeError(f"Rendered page has an unexpected aspect ratio: {path.name} ratio={ratio:.3f}")
 
     histogram = image.histogram()
     ink_pixels = sum(histogram[:245])
@@ -275,6 +279,7 @@ def _audit_page(path: Path) -> dict[str, object]:
         "file": path.name,
         "width": width,
         "height": height,
+        "orientation": orientation,
         "ink_ratio": round(ink_ratio, 6),
         "content_bbox": list(content_bbox),
     }
@@ -339,10 +344,14 @@ def verify(output_dir: Path, *, generate_only: bool = False) -> Path:
     if len(page_paths) != pages:
         raise RuntimeError(f"PNG page count {len(page_paths)} does not match PDF page count {pages}")
     page_audit = [_audit_page(path) for path in page_paths]
+    landscape_pages = [page["file"] for page in page_audit if page["orientation"] == "landscape"]
+    if landscape_pages != ["page-2.png"]:
+        raise RuntimeError(f"Expected only the process diagram on landscape page 2: {landscape_pages}")
 
     text_path = output_dir / "rendered-text.txt"
     _run([pdftotext, "-layout", str(pdf_path), str(text_path)])
     rendered_text = unicodedata.normalize("NFKC", text_path.read_text(encoding="utf-8"))
+    compact_text = "".join(rendered_text.split())
     required_text = [
         "SAP BUSINESS BLUEPRINT",
         "跨渲染器中文字体与长表格验收客户",
@@ -357,7 +366,7 @@ def verify(output_dir: Path, *, generate_only: bool = False) -> Path:
         "ME51N",
         "J45",
     ]
-    missing = [value for value in required_text if value not in rendered_text]
+    missing = [value for value in required_text if "".join(value.split()) not in compact_text]
     if missing:
         raise RuntimeError(f"Rendered PDF is missing expected Chinese/content text: {missing}")
     if "\ufffd" in rendered_text:
