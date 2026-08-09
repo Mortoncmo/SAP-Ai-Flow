@@ -33,7 +33,7 @@ SAP AI Flow 是一个面向 SAP 业务流程建模的对话式流程图工具。
 
 - Web：React 19、TypeScript、Vite、`@xyflow/react`、Dagre、Zustand。
 - API：Python 3.12、FastAPI、Pydantic 2、LangGraph、HTTPX、SQLAlchemy、ChromaDB、PyJWT。
-- 测试：pytest、Vitest；浏览器验收使用 Playwright CLI。
+- 测试：pytest、Vitest；浏览器验收使用 Playwright CLI；Word 排版验收使用 LibreOffice、Poppler 和 Noto CJK。
 - 部署：Docker、Docker Compose、Nginx。
 
 ## 本地开发
@@ -132,6 +132,19 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 脚本读取 `examples/mm-p2p-acceptance-demo.json`，显式按 UTF-8 发送和读取中文 JSON，并校验 7 个节点、6 条连线、5 条泳道、连线标签和发布状态。随后创建 Markdown、DOCX 两个异步任务，轮询完成并把两个 `export_id` 写入 `acceptance-summary.json`。三个产物默认写入 `output/acceptance-demo`；该目录已忽略，不会把运行数据提交到仓库。
 
 本地开发默认使用 `-UserId local-user`。对启用 OIDC 的部署环境执行时，通过受控 Secret 注入设置 `SAP_FLOW_ACCESS_TOKEN`，或显式传入 `-AccessToken`；令牌只进入 `Authorization` 请求头，不写入验收摘要。不要把令牌明文写入命令历史。
+
+## DOCX 渲染验收
+
+Linux/CI 环境安装 LibreOffice Writer、Poppler 和 Noto CJK 后，运行代表性 MM/P2P 压力样例：
+
+```bash
+sudo apt-get install --yes --no-install-recommends libreoffice-writer poppler-utils fonts-noto-cjk
+python scripts/verify_docx_render.py --output-dir output/docx-render-qa
+```
+
+脚本直接调用生产 `render_docx`，生成包含五泳道、长中文节点、SAP 证据和 GAP 长表格的 DOCX，再输出 PDF、逐页 PNG、提取文本、嵌入字体清单和 `render-report.json`。门禁检查第 2 页横向流程图、其余页面纵向、完整中文内容、Noto CJK 嵌入、页面非空和内容不触边；最终仍需人工查看全部 PNG。GitHub Actions 的 `docx-render` 作业执行同一流程并上传 `docx-render-qa` 证据。
+
+没有 `soffice` 时可执行 `--generate-only` 验证 DOCX 结构，但该模式不生成 PDF/PNG，不能作为字体、分页或视觉验收通过的证据。
 
 ## 容量测试
 

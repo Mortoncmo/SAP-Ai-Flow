@@ -1,6 +1,6 @@
 # SAP Blueprint AI Agent 实施规格
 
-> 文档状态：新版说明追踪与生产验收基线 3.7
+> 文档状态：新版说明追踪与 DOCX 渲染验收基线 3.8
 >
 > 实施状态校准：2026-08-09（以当前代码与自动化测试为准）
 >
@@ -64,7 +64,7 @@
 | 对画布节点执行增改删 | 扩展为节点、连线和泳道三类一等对象的独立增改删；图标和布局也有明确 Patch，不以“流程”节点代替泳道 | 已实现并自动化验收 | “新增三个泳道只新增泳道”等端到端用例持续通过 |
 | J45、T-Code、Fiori App 和 Best Practice RAG 匹配 | 使用版本化 Markdown、ChromaDB 持久化索引、向量/词法混合召回、上下文过滤、引用回链和证据门禁 | 技术链路已实现，生产语料未关闭 | 知识授权完成，SAP 顾问签字标注集和质量门槛通过 |
 | GAP 智能识别和前端预警 | AI 只能产生 `candidate`，顾问执行确认、驳回或解决，所有决策进入审计 | 仓库内已实现 | SAP 顾问扩充正式 GAP 标注集并完成业务验收 |
-| Word / Markdown 一键导出 | 两种格式共用 `BlueprintDocumentModel`，通过持久化异步任务生成、查询和下载 | 内容与任务链路已实现，Word 视觉验收未关闭 | 在具备 LibreOffice 和中文字体的目标环境验证分页、字体、长表格与图片清晰度 |
+| Word / Markdown 一键导出 | 两种格式共用 `BlueprintDocumentModel`，通过持久化异步任务生成、查询和下载；CI 使用 LibreOffice、Poppler 和 Noto CJK 渲染压力样例 | 仓库内内容、任务和跨渲染器视觉验收已关闭 | 目标部署使用不同字体或渲染器时重新执行同一门禁并纳入运维签字 |
 | Business、Knowledge、Process 和 Document Agent 分工 | 保留四类逻辑职责，由 LangGraph 做请求级路由；领域校验、永久 ID、权限和事务仍由现有服务层负责 | 已实现 | 编排故障、证据不足和导出预检回归持续通过 |
 | Project、Process、Node 和 ChangeLog 持久化 | 采用更完整的 `Project / Process / ProcessRevision / ChangeLog / GapDecision / ProjectMember / ExportJob` 模型，完整图快照是权威数据 | 已实现 | 目标 PostgreSQL 迁移、备份恢复和运维流程完成签字 |
 | React 18、Ant Design、OpenAI/Claude、WebSocket 等建议选型 | 保留当前已验证的 React 19、自定义设计体系、Provider 抽象和 REST；SSE 仅在未来长任务确有需要时引入 | 已决策 | 若未来变更选型，先给出收益、迁移范围和回归计划 |
@@ -72,7 +72,7 @@
 | 顾问人效提升 30% 至 50% | 作为业务价值假设跟踪，不从功能测试结果推导 | 尚未验证 | 选定真实项目，记录人工基线、Agent 辅助耗时、返工率和样本规模后评估 |
 | 输出格式不稳定、SAP 幻觉和节点重叠风险 | 使用 Pydantic、原子 Patch、证据/待确认门禁、Dagre 布局及失败不改图策略 | 仓库内防护已实现 | 固定回归集、顾问质量门槛和真实项目观察均达标 |
 
-本追踪表之外，新版说明未定义但生产交付必须补齐的门槛包括：OIDC 真实身份提供方联调、知识来源授权、跨项目权限、日志脱敏与集中告警、真实外部模型/PostgreSQL 容量、缓存多实例策略、DOCX 跨渲染器检查以及目标环境运维签字。这些项目统一在第 15 至 18 节跟踪，未关闭前不得宣称生产验收完成。
+本追踪表之外，新版说明未定义但生产交付必须补齐的门槛包括：OIDC 真实身份提供方联调、知识来源授权、跨项目权限、日志脱敏与集中告警、真实外部模型/PostgreSQL 容量、缓存多实例策略以及目标环境部署与运维签字。DOCX 跨渲染器基线已由 CI 关闭；目标环境若改变字体或渲染器，仍必须重跑同一门禁。这些项目统一在第 15 至 18 节跟踪，未关闭前不得宣称生产验收完成。
 
 ## 2. 产品定义
 
@@ -199,7 +199,7 @@
 - 容器基础镜像和操作系统包 Trivy 扫描、CycloneDX SBOM 和可修复 Critical 门禁已接入部署 CI；未修复发现仍保留在日志/构件中。集中日志采集/保留策略、告警规则和生产日志平台联调尚未完成；应用级请求/异常/审计脱敏与秘密扫描已具备自动化红线测试。
 - Python SDK、CLI 和 BPMN 导出。
 - 当前后台导出执行仍依赖 FastAPI 进程内 `BackgroundTasks`，导出二进制暂存应用数据库；尚未引入独立任务队列、Worker 和对象存储，因此不能把当前实现视为高并发、多实例或永久文档存储方案。
-- 当前机器无 Docker CLI，不能提供本机 Compose 实跑证据；镜像 build/up、PostgreSQL readiness、迁移及备份恢复已由 GitHub Ubuntu runner 验收通过，中文字体和 DOCX 排版仍需带 LibreOffice 的目标环境单独验收。
+- 当前机器无 Docker CLI 和 LibreOffice，不能提供本机 Compose 或 DOCX PNG 渲染证据；镜像 build/up、PostgreSQL readiness、迁移、备份恢复及 LibreOffice/Noto CJK DOCX 渲染已由 GitHub Ubuntu runner 验收通过。目标部署若使用不同字体或渲染器，仍需重跑并纳入运维签字。
 - 生产备份、恢复、迁移和 readiness 操作已写入 `deploy/OPERATIONS.md`，真实卷归档与恢复演练仍需 Docker 环境。
 - 真实外部模型和 PostgreSQL 环境的并发、长尾性能、实际缓存命中率与容量压测尚未完成；当前只证明缓存功能、单事件循环内并发合并和本地 Patch 20 次采样 P95 小于 1 秒。缓存仍为 API 进程内实现，多个实例之间不共享结果。
 
@@ -223,12 +223,12 @@
 
 ### 3.4 本轮验证记录（2026-08-09）
 
-- 后端 `ruff check .` 通过，pytest 98 项通过，包含 LangGraph 纯结构/SAP 专业意图路由、证据不足与待确认分支、文档导出预检，以及知识服务强制不可用时持久化泳道/连线/图标修改仍连续保存且不增节点；同时覆盖浏览器 smoke CORS 启动配置、数据库 readiness 安全失败和后端标识、容量脚本安全/指标契约、Docker 构建上下文与 Compose 暴露面静态红线、Compose 列表型环境变量加载和 PostgreSQL 部署工作流断言、13 个检索和 8 个 GAP 固定评估案例、跨流程/跨 Release GAP 规则隔离、版本化验收场景完整 API 闭环、异步导出持久化/下载/过期/失败/权限与迁移、`update_edge` 有效/非法/重复/原子回滚、自然语言连线增改删及重复/缺失/歧义错误，以及 DeepSeek 时限/重试、角色门禁、发布 GAP 审计、JWT、证据门禁、外部模型策略、日志脱敏、数据库事务回滚和依赖/导出失败保图。
+- 后端 `ruff check .` 通过，pytest 99 项通过，包含 LangGraph 纯结构/SAP 专业意图路由、证据不足与待确认分支、文档导出预检，以及知识服务强制不可用时持久化泳道/连线/图标修改仍连续保存且不增节点；同时覆盖浏览器 smoke CORS 启动配置、数据库 readiness 安全失败和后端标识、容量脚本安全/指标契约、Docker 构建上下文与 Compose 暴露面静态红线、DOCX 渲染 CI 门禁、Compose 列表型环境变量加载和 PostgreSQL 部署工作流断言、13 个检索和 8 个 GAP 固定评估案例、跨流程/跨 Release GAP 规则隔离、版本化验收场景完整 API 闭环、异步导出持久化/下载/过期/失败/权限与迁移、`update_edge` 有效/非法/重复/原子回滚、自然语言连线增改删及重复/缺失/歧义错误，以及 DeepSeek 时限/重试、角色门禁、发布 GAP 审计、JWT、证据门禁、外部模型策略、日志脱敏、数据库事务回滚和依赖/导出失败保图。
 - 依赖/导出失败回归通过：知识服务和 Provider 故障分别返回稳定错误；DOCX 渲染故障返回通用 500；三类失败后当前流程仍为修订 0，修订表与 ChangeLog 无新增记录。
 - SQLite 故障注入在 `ChangeLog` INSERT 阶段抛出 `OperationalError`，验证 API 返回安全的 `DATABASE_WRITE_FAILED`（503）并保留请求号；重新打开 Session 后流程修订号、修订表和 ChangeLog 均无部分更新。
 - 模型缓存专项回归覆盖 TTL、LRU、8 个相同并发请求只调用一次 Provider、失败不缓存、最后等待者取消后终止上游任务、跨项目/流程隔离和命中后重新执行证据校验；数据库故障注入还验证首次外部调用成功但事务回滚后，相同重试从缓存恢复，Provider 总调用次数仍为 1，最终只保存 1 个修订和 1 条 ChangeLog。
 - 前端 Vitest 30 项、TypeScript typecheck 和 production build 通过；覆盖异步导出创建、轮询、下载、统一截止时间、显式取消，以及成员 API、项目策略、导出文件名、导出失败错误、OIDC 配置、同源回调、防开放跳转、登录/退出回调和 Bearer Token 请求头。
-- Alembic SQLite 升级/回滚、`export_job` 迁移、旧项目成员安全回填、DOCX 结构审计、表格 geometry、图片和标题层级审计通过。
+- Alembic SQLite 升级/回滚、`export_job` 迁移、旧项目成员安全回填、DOCX 结构审计、表格 geometry、横竖分节、表格行禁拆、图片和标题层级审计通过。
 - 仓库内 Playwright CLI smoke 默认自动分配端口并启动当前 API、Web 和隔离 SQLite 测试库，不依赖已运行的开发进程。它已完成自然语言连线新增、标签修改和删除，以及画布连线 Inspector 标签保存和删除；三类操作均验证节点、泳道不变，连线永久 ID 和端点在标签更新时保持不变，`viewer` 可查看但不能编辑、删除或使用键盘删除连线。
 - 同一 smoke 已完成持久化自然语言修改、发布只读、新草稿、历史回看、成员 CRUD、外部模型开关、异步 Markdown / Word 下载、取消/超时/409 恢复、泳道不误增节点、撤销/重做/布局/刷新恢复和 20 次本地 Patch P95 小于 1 秒；1440 x 900、1024 x 768 和 390 x 844 页面宽度正常，移动端成员弹窗无横向溢出，控制台与页面均为 0 error。
 - OIDC 本切片浏览器验收覆盖未配置兼容模式和“已配置但未登录”模式：登录入口可见，项目选择与新建项目被禁用，390 x 844 和 1024 x 768 页面/页头 `scrollWidth` 均等于视口宽度，登录图标宽度稳定为 35 px，控制台无 error。真实 IdP 跳转与回调仍待目标环境联调。
@@ -236,8 +236,8 @@
 - `scripts/browser_smoke.ps1` 与 `scripts/browser_smoke.js` 已固化本地历史/恢复、泳道、连线双入口增改删、成员 CRUD、外部模型策略、取消/超时/冲突恢复、本地 P95、持久化发布生命周期、管理员/查看者权限、异步任务 `202`/`export_id`/`pending` 与实际下载，以及三视口回归；还需在真实外部模型/PostgreSQL 环境扩展并发、长尾与容量测试。
 - `scripts/run_capacity_test.ps1` 已在隔离 SQLite/Local Provider 环境完成 1/2/4 并发、每档 5 样本的脚本验收，三档错误率均为 0，P95 分别为 430/90/187 ms；1 ms P95/P99 门槛会正确保存 `passed=false` 报告并返回非零。数据创建确认、远程无 Token 拒绝、SQLite 被 `-RequirePostgreSQL` 拒绝且不进入测试数据创建的门禁均已实跑。该结果只证明工具可用，不是外部模型/PostgreSQL 容量结论。
 - `scripts/run_acceptance_demo.ps1` 已在独立 FastAPI 进程和隔离 SQLite 数据库中实跑通过，发布修订 2 / Release 1，创建两个持久化 `export_id`，并生成内容有效的 Markdown、DOCX 和 JSON 摘要；Windows PowerShell 5 的中文请求/响应已使用显式 UTF-8 字节和流解码验证。
-- 当前环境没有 LibreOffice/`soffice`，DOCX 尚未完成 PNG 级视觉渲染；当前环境没有 Docker CLI，Compose 尚未完成真实 build/up 验收。
-- 最新 GitHub Actions 运行 `31310909855` 的 API、Web 和 `deploy` 三个作业全部通过且无检查注解；工作流已升级到 Node 24 兼容的官方 Action 主版本。`deploy` 作业重新生成并上传 API/Web CycloneDX SBOM，通过两个镜像的可修复 Critical 漏洞门禁，并完成镜像构建、干净 Compose 启动、PostgreSQL readiness、Alembic head、`pg_dump` 和独立数据库恢复验证。
+- 当前机器没有 LibreOffice/`soffice` 和 Docker CLI；对应验收由 GitHub Ubuntu runner 执行，不能把本机 `--generate-only` 结构检查误报为视觉通过。
+- 最新 GitHub Actions 运行 `31312821609` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过。`docx-render` 使用 LibreOffice Writer、Poppler 和 Noto CJK 生成 5 页 PDF/PNG，验证第 2 页为横向流程图、其余页面为纵向，检查中文文本、嵌入字体、页面非空和内容不触边；5 页 PNG 已逐页人工检查，无文字重叠、裁切、拆行表格、缺失字形或页眉页脚异常。`deploy` 作业继续通过镜像/SBOM/Trivy、干净 Compose、PostgreSQL readiness、Alembic head、`pg_dump` 和独立数据库恢复验证。
 
 ### 3.5 基线迁移原则
 
@@ -893,6 +893,7 @@ Markdown 和 Word 必须由同一个 `BlueprintDocumentModel` 生成，禁止两
 - 流程图使用确定性全图 SVG/PNG 渲染，包含泳道且无截断。
 - Markdown 先作为结构和内容基线；Word 使用 `python-docx` 套用同一内容模型。
 - Word 模板支持页眉、页脚、客户名称、版本和 GAP 表格，不把客户品牌写死在代码中。
+- 流程图使用独立横向 Letter 页面，正文恢复纵向 Letter；表格行禁止跨页拆分，页眉、页脚和页码在分节后保持一致。
 - 导出时未确认元数据和 GAP 必须保留“待确认/候选”标识。
 - Web 创建任务后通过 `export_id` 轮询，只有 `completed` 状态返回下载地址；`failed`、`expired` 和超时分别显示稳定错误并允许重新创建任务。
 - 后台任务必须先通过数据库条件更新抢占执行权；正常 `running` 任务不得重复渲染，超过陈旧阈值后才允许恢复。
@@ -904,6 +905,7 @@ Markdown 和 Word 必须由同一个 `BlueprintDocumentModel` 生成，禁止两
 - 文档中每个 AI 生成的专业结论都能定位到证据或明确标记待确认。
 - 1440 x 900 画布中的典型 P2P 流程导出后文字清晰、泳道完整、无裁切。
 - 相同发布版本重复导出时业务内容一致。
+- CI 压力样例必须使用 LibreOffice、Poppler 和 Noto CJK 生成逐页 PNG，验证中文文本、嵌入字体、横竖页面、非空页面和内容边界，并人工检查所有页面。
 - 创建、轮询、下载、失败、过期、陈旧恢复和跨项目/跨流程权限路径均有自动化回归。
 
 ## 13. 安全、权限与审计
@@ -1122,10 +1124,10 @@ V1.0 至少定义以下角色：
 - [x] 加入页眉、页脚、版本、流程图和表格。
 - [x] 实现持久化异步导出任务、`export_id` 状态查询、失败/过期处理、陈旧任务恢复和下载接口。
 - [x] 前端接入任务创建、250 毫秒轮询和完成后下载，并保持 44 秒统一截止时间和显式取消语义。
-- [ ] 验证中文字体、分页、长表格和图片清晰度。
+- [x] 使用 LibreOffice、Poppler 和 Noto CJK 验证中文字体、横竖分页、长表格禁拆行和流程图清晰度，并上传 DOCX/PDF/逐页 PNG/字体/报告证据。
 - [x] 对比 Word 与 Markdown 共用内容模型的结构。
 
-退出标准：Word 与 Markdown 节点、GAP、引用和版本数据一致；异步任务的持久化、状态、权限、过期和下载回归已通过。结构审计已通过，中文字体和分页的 PNG 视觉验收待有 `soffice` 的环境完成，因此 Word 的生产排版验收仍未关闭。
+退出标准：Word 与 Markdown 节点、GAP、引用和版本数据一致；异步任务的持久化、状态、权限、过期和下载回归已通过。结构审计、LibreOffice/Noto CJK 自动门禁和 5 页 PNG 全页视觉检查均已通过。目标部署改变字体或渲染器时必须重跑同一门禁，但不再把仓库内 DOCX 排版基线列为未完成项。
 
 ### Week 11：LangGraph、评估与性能
 
@@ -1205,7 +1207,7 @@ V1.0 至少定义以下角色：
 1. 在目标 SSO/OIDC 身份提供方登记 SPA 客户端、回调地址和 API audience，完成真实登录、退出、Token 刷新/过期及部署联调；通用 Authorization Code + PKCE、Bearer Token 注入和应用日志治理已完成。
 2. 完成知识来源/授权顾问审核、正式标注集和生产语义嵌入模型对比；ChromaDB 持久化、离线混合召回和固定自动化评估集已完成。
 3. 使用已固化的容量脚本在真实外部模型/PostgreSQL 环境完成并发、长尾和容量测试并归档 JSON/CSV；同时验证多实例下导出任务抢占与陈旧恢复，并决定生产环境采用独立队列/Worker 和对象存储还是限制为单实例低并发部署。
-4. 在具备 LibreOffice 和中文字体的目标环境完成 DOCX 视觉渲染、部署联调和运行维护签字；应用数据库中的导出二进制不得被当作永久交付物存储。
+4. 在目标环境复跑已固化的 DOCX 渲染门禁，并完成部署联调和运行维护签字；若目标环境沿用 LibreOffice/Noto CJK，可直接对比 CI 基线，若更换字体或渲染器则必须重新逐页检查。应用数据库中的导出二进制不得被当作永久交付物存储。
 5. 结合真实外部模型容量和命中率结果调整缓存 TTL/容量，并决定多实例环境是否引入分布式缓存；Python SDK、CLI 和 BPMN 保持后续优先级。
 
-当前本机可执行的最终流程编辑验收项和 GitHub Actions Compose/PostgreSQL 自动化部署验收已完成。生产验收剩余门槛是具体身份提供方、知识授权与顾问签字、集中日志、真实外部模型容量、LibreOffice 视觉检查和目标环境部署联调；这些项目未验证前不得宣称生产验收完成。
+当前本机可执行的最终流程编辑验收项、GitHub Actions Compose/PostgreSQL 自动化部署验收和 LibreOffice/Noto CJK DOCX 跨渲染器验收已完成。生产验收剩余门槛是具体身份提供方、知识授权与顾问签字、集中日志、真实外部模型容量、目标环境复跑和部署联调；这些项目未验证前不得宣称生产验收完成。
