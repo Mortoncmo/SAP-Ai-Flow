@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createEmptyGraph, normalizeGraph } from './data'
+import { createEmptyGraph, emptySapMetadata, normalizeGraph } from './data'
 import type { GraphDocument } from './types'
 
 describe('normalizeGraph', () => {
@@ -26,6 +26,7 @@ describe('normalizeGraph', () => {
         description: null,
         icon: 'clipboard-check',
         lane_id: 'missing-lane',
+        sap: emptySapMetadata(),
       },
     ]
 
@@ -37,5 +38,27 @@ describe('normalizeGraph', () => {
     graph.lanes = [{ id: 'lane', label: '业务', color: 'not-a-color' }]
 
     expect(normalizeGraph(graph).lanes[0].color).toBe('#52796f')
+  })
+
+  it('upgrades a 1.0 graph and preserves its topology while adding SAP defaults', () => {
+    const legacy = {
+      schema_version: '1.0',
+      graph_id: 'legacy',
+      version: 4,
+      title: '旧流程',
+      direction: 'TB',
+      nodes: [{ id: 'start', type: 'start', label: '开始', description: null }],
+      edges: [],
+      lanes: [],
+      layout: { start: { x: 12, y: 24 } },
+    }
+
+    const normalized = normalizeGraph(legacy)
+
+    expect(normalized.schema_version).toBe('2.0')
+    expect(normalized.module).toBe('MM')
+    expect(normalized.process_scope).toBe('P2P')
+    expect(normalized.nodes[0].sap.gap.status).toBe('none')
+    expect(normalized.layout.start).toEqual({ x: 12, y: 24 })
   })
 })

@@ -2,7 +2,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
-from app.models.graph import NodeIcon, NodeType, StrictModel
+from app.models.graph import NodeIcon, NodeType, SapMetadata, StrictModel
 
 
 class NodeDraft(StrictModel):
@@ -11,6 +11,7 @@ class NodeDraft(StrictModel):
     description: str | None = Field(default=None, max_length=1000)
     icon: NodeIcon | None = None
     lane_id: str | None = Field(default=None, min_length=1, max_length=100)
+    sap: SapMetadata = Field(default_factory=SapMetadata)
 
 
 class NodeChanges(StrictModel):
@@ -19,6 +20,7 @@ class NodeChanges(StrictModel):
     description: str | None = Field(default=None, max_length=1000)
     icon: NodeIcon | None = None
     lane_id: str | None = Field(default=None, min_length=1, max_length=100)
+    sap: SapMetadata = Field(default_factory=SapMetadata)
 
     @model_validator(mode="after")
     def require_change(self) -> "NodeChanges":

@@ -26,6 +26,7 @@ def apply_patch(current: GraphDocument, patch: LLMPatch) -> GraphDocument:
                         description=operation.node.description,
                         icon=operation.node.icon,
                         lane_id=lane_id,
+                        sap=operation.node.sap,
                     )
                 )
             elif operation.op == "remove_node":
@@ -43,7 +44,7 @@ def apply_patch(current: GraphDocument, patch: LLMPatch) -> GraphDocument:
                 if "lane_id" in changes and changes["lane_id"] is not None:
                     changes["lane_id"] = _resolve_reference(changes["lane_id"], refs)
                     _require_lane(working, changes["lane_id"])
-                updated = node.model_copy(update=changes)
+                updated = Node.model_validate({**node.model_dump(mode="python"), **changes})
                 working.nodes = [updated if item.id == node.id else item for item in working.nodes]
             elif operation.op == "add_edge":
                 source = _resolve_reference(operation.edge.source, refs)

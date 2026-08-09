@@ -9,6 +9,7 @@ from app.core.errors import FlowchartError
 from app.graph.patcher import apply_patch
 from app.graph.validator import graph_warnings
 from app.models.api import ModifyFlowchartRequest, ModifyFlowchartResponse, ResponseMetrics
+from app.security.auth import require_development_mode
 
 router = APIRouter(prefix="/api/v1/flowcharts", tags=["flowcharts"])
 
@@ -20,6 +21,7 @@ def get_provider(settings: Settings = Depends(get_settings)) -> LLMProvider:
 @router.post("/modify", response_model=ModifyFlowchartResponse)
 async def modify_flowchart(
     request: ModifyFlowchartRequest,
+    _: None = Depends(require_development_mode),
     provider: LLMProvider = Depends(get_provider),
 ) -> ModifyFlowchartResponse:
     started = perf_counter()
@@ -28,6 +30,7 @@ async def modify_flowchart(
             request.current_graph,
             request.instruction,
             request.locale,
+            [],
         )
         updated = apply_patch(request.current_graph, result.patch)
     except FlowchartError as exc:

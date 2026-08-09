@@ -2,28 +2,37 @@ import re
 
 from app.agent.base import ProviderResult
 from app.models.graph import GraphDocument, Node, NodeIcon, NodeType, Swimlane
+from app.models.knowledge import KnowledgeEvidence
 from app.models.patch import LLMPatch
 
 
 class LocalRuleProvider:
     """Deterministic provider for local development and automated tests."""
 
+    external = False
+
     async def generate_patch(
         self,
         graph: GraphDocument,
         instruction: str,
         locale: str,
+        evidence: list[KnowledgeEvidence] | None = None,
     ) -> ProviderResult:
         del locale
-        patch = self._build_patch(graph, instruction.strip())
+        patch = self._build_patch(graph, instruction.strip(), evidence or [])
         return ProviderResult(patch=patch, provider="local", model="rule-engine-v1")
 
-    def _build_patch(self, graph: GraphDocument, instruction: str) -> LLMPatch:
+    def _build_patch(
+        self,
+        graph: GraphDocument,
+        instruction: str,
+        evidence: list[KnowledgeEvidence],
+    ) -> LLMPatch:
         if "泳道" in instruction:
             return self._build_swimlane_patch(graph, instruction)
 
         if not graph.nodes or any(word in instruction for word in ("创建流程", "生成流程", "新建流程")):
-            return self._create_flow(instruction)
+            return self._create_flow(instruction, evidence)
 
         match = re.search(
             r"(?:给|为)(.+?)(?:增加|添加|设置|使用)(.+?)图标[。.!！]?$",
@@ -211,7 +220,11 @@ class LocalRuleProvider:
                 labels.append(label)
         return labels
 
-    def _create_flow(self, instruction: str) -> LLMPatch:
+    def _create_flow(
+        self,
+        instruction: str,
+        evidence: list[KnowledgeEvidence],
+    ) -> LLMPatch:
         candidates: list[tuple[str, NodeType]] = []
         keyword_steps = (
             ("需求", "提交业务需求", NodeType.TASK),
@@ -227,6 +240,9 @@ class LocalRuleProvider:
         for keyword, label, node_type in keyword_steps:
             if keyword in instruction and all(item[0] != label for item in candidates):
                 candidates.append((label, node_type))
+        if any(keyword in instruction.upper() for keyword in ("P2P", "采购到付款", "直接物料")):
+            return self._create_p2p_flow(evidence)
+
         if not candidates:
             candidates = [("处理业务请求", NodeType.TASK), ("确认处理结果", NodeType.TASK)]
 
@@ -245,6 +261,7 @@ class LocalRuleProvider:
                         "type": node_type.value,
                         "label": label,
                         "icon": self._guess_icon(label),
+                        "sap": self._sap_metadata(label),
                     },
                 }
             )
@@ -258,6 +275,97 @@ class LocalRuleProvider:
             operations.append({"op": "add_edge", "edge": edge})
         return LLMPatch(
             change_summary="根据指令创建业务流程骨架。",
+            operations=operations,
+        )
+
+    def _create_p2p_flow(self, evidence: list[KnowledgeEvidence]) -> LLMPatch:
+        j45_evidence = next(
+            (
+                item
+                for item in evidence
+                if item.source_id == "kb-mm-j45-project-seed"
+                and "transaction mapping" in item.section.lower()
+            ),
+            None,
+        )
+        evidence_ref = j45_evidence.evidence_ref if j45_evidence else None
+        metadata_status = (
+            "verified"
+            if j45_evidence and j45_evidence.review_status == "approved"
+            else "pending_confirmation"
+        )
+        lanes = [
+            ("requester", "需求部门", "#52796f"),
+            ("approval", "审批人", "#7b668f"),
+            ("buyer", "采购部门", "#5b7394"),
+            ("warehouse", "仓库", "#547f86"),
+            ("finance", "财务", "#a36f3f"),
+        ]
+        steps = [
+            ("start", "开始", NodeType.START, "requester", None, None, None),
+            ("pr", "创建采购申请", NodeType.TASK, "requester", "transaction", "ME51N", "Requester"),
+            ("approval", "采购申请审批", NodeType.TASK, "approval", "approval", "ME54N", "Approver"),
+            ("po", "创建采购订单", NodeType.TASK, "buyer", "transaction", "ME21N", "Purchaser"),
+            ("gr", "货物接收", NodeType.TASK, "warehouse", "transaction", "MIGO", "Warehouse Clerk"),
+            ("ir", "发票校验", NodeType.TASK, "finance", "validation", "MIRO", "Accounts Payable"),
+            ("end", "结束", NodeType.END, "finance", None, None, None),
+        ]
+        operations: list[dict[str, object]] = [
+            {
+                "op": "add_lane",
+                "ref": f"lane_{ref}",
+                "lane": {"label": label, "color": color},
+            }
+            for ref, label, color in lanes
+        ]
+        for ref, label, node_type, lane_ref, step_type, tcode, role in steps:
+            sap = self._sap_metadata(label)
+            if step_type:
+                sap = {
+                    **sap,
+                    "step_type": step_type,
+                    "tcodes": [
+                        {
+                            "code": tcode,
+                            "status": metadata_status,
+                            "evidence_ref": evidence_ref,
+                        }
+                    ],
+                    "roles": [role],
+                    "best_practice_refs": [
+                        {
+                            "scope_item": "J45",
+                            "step": label,
+                            "evidence_ref": evidence_ref,
+                        }
+                    ],
+                }
+            operations.append(
+                {
+                    "op": "add_node",
+                    "ref": ref,
+                    "node": {
+                        "type": node_type.value,
+                        "label": label,
+                        "icon": self._guess_icon(label),
+                        "lane_id": f"@lane_{lane_ref}",
+                        "sap": sap,
+                    },
+                }
+            )
+        for index in range(len(steps) - 1):
+            operations.append(
+                {
+                    "op": "add_edge",
+                    "edge": {
+                        "source": f"@{steps[index][0]}",
+                        "target": f"@{steps[index + 1][0]}",
+                        "label": "通过" if steps[index][0] == "approval" else None,
+                    },
+                }
+            )
+        return LLMPatch(
+            change_summary="创建 SAP MM/P2P 采购到付款流程骨架，专业字段均标记为待确认。",
             operations=operations,
         )
 
@@ -276,6 +384,7 @@ class LocalRuleProvider:
                     "label": label,
                     "icon": self._guess_icon(label),
                     "lane_id": anchor.lane_id,
+                    "sap": self._sap_metadata(label),
                 },
             }
         ]
@@ -320,6 +429,7 @@ class LocalRuleProvider:
                     "label": label,
                     "icon": self._guess_icon(label),
                     "lane_id": anchor.lane_id,
+                    "sap": self._sap_metadata(label),
                 },
             }
         ]
@@ -427,6 +537,26 @@ class LocalRuleProvider:
             if any(keyword in label for keyword in keywords):
                 return icon.value
         return None
+
+    @staticmethod
+    def _sap_metadata(label: str) -> dict[str, object]:
+        return {
+            "step_type": None,
+            "tcodes": [],
+            "fiori_apps": [],
+            "roles": [],
+            "configuration_points": [],
+            "best_practice_refs": [],
+            "gap": {
+                "status": "none",
+                "category": None,
+                "description": None,
+                "recommendation": None,
+                "confidence": None,
+                "evidence_refs": [],
+                "owner": None,
+            },
+        }
 
     @staticmethod
     def _parse_icon(value: str) -> NodeIcon:

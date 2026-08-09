@@ -22,8 +22,10 @@ jobs:
           cache: pip
           cache-dependency-path: apps/api/requirements-dev.txt
       - run: pip install -r requirements-dev.txt
-      - run: ruff check app tests
+      - run: ruff check app tests alembic
       - run: pytest
+      # Chroma is embedded only; SECURITY.md records why its unpatched HTTP-server CVE is unreachable.
+      - run: pip-audit -r requirements.txt --ignore-vuln PYSEC-2026-311
 
   web:
     runs-on: ubuntu-latest
@@ -37,3 +39,5 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
+      - run: npm audit --omit=dev --audit-level=high
+      - run: python scripts/security_scan.py --include-build

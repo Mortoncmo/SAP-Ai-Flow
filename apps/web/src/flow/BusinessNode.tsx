@@ -1,6 +1,7 @@
 import type { Node, NodeProps } from '@xyflow/react'
 import { Handle, Position } from '@xyflow/react'
-import type { Direction, NodeIcon, NodeType } from '../types'
+import { AlertTriangle } from 'lucide-react'
+import type { Direction, GapStatus, MetadataStatus, NodeIcon, NodeType } from '../types'
 import { NodeIconGlyph } from './nodeIcons'
 
 export interface BusinessNodeData extends Record<string, unknown> {
@@ -9,6 +10,9 @@ export interface BusinessNodeData extends Record<string, unknown> {
   nodeType: NodeType
   direction: Direction
   icon: NodeIcon | null
+  tcode: string | null
+  tcodeStatus: MetadataStatus | null
+  gapStatus: GapStatus
 }
 
 export type BusinessNodeModel = Node<BusinessNodeData, 'business'>
@@ -35,6 +39,16 @@ export function BusinessNode({ data, selected }: NodeProps<BusinessNodeModel>) {
         )}
         <strong>{data.label}</strong>
       </span>
+      {data.tcode && (
+        <small className={`business-node__tcode is-${data.tcodeStatus ?? 'pending_confirmation'}`}>
+          {data.tcode}
+        </small>
+      )}
+      {data.gapStatus !== 'none' && (
+        <span className="business-node__gap" title={`GAP：${data.gapStatus}`} aria-label={`GAP ${data.gapStatus}`}>
+          <AlertTriangle size={13} />
+        </span>
+      )}
       {allowsOutgoing && (
         <Handle
           type="source"

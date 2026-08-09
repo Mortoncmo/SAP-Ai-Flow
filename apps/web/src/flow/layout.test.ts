@@ -24,7 +24,7 @@ describe('flow layout', () => {
     const graph = layoutGraph(createSampleGraph())
     const frames = new Map(laneFrames(graph).map((frame) => [frame.id, frame]))
 
-    expect(frames.size).toBe(3)
+    expect(frames.size).toBe(5)
     graph.nodes.forEach((node) => {
       const frame = frames.get(node.lane_id!)!
       const position = graph.layout[node.id]

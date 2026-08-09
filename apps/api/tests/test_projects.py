@@ -1,0 +1,945 @@
+import re
+from collections.abc import Iterator
+from io import BytesIO
+from urllib.parse import unquote
+
+import pytest
+from docx import Document
+from fastapi.testclient import TestClient
+from sqlalchemy import event, func, select
+from sqlalchemy.exc import OperationalError
+
+from app.agent.base import ProviderResult
+from app.api.routes import projects as projects_route
+from app.api.routes.flowcharts import get_provider
+from app.api.routes.projects import get_repository
+from app.core.errors import FlowchartError, ProviderError
+from app.db.database import Database
+from app.db.models import (
+    ChangeLogRecord,
+    GapDecisionRecord,
+    ProcessRecord,
+    ProcessRevisionRecord,
+    ProjectAuditRecord,
+    ProjectMemberRecord,
+    ProjectRecord,
+)
+from app.db.repository import BlueprintRepository
+from app.knowledge.service import get_knowledge_service
+from app.main import app
+from app.models.graph import SapContext
+from app.models.patch import LLMPatch
+
+
+class TrackingExternalProvider:
+    external = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.evidence = []
+
+    async def generate_patch(self, graph, instruction, locale, evidence=None):
+        del graph, instruction, locale
+        self.calls += 1
+        self.evidence = evidence or []
+        return ProviderResult(
+            patch=LLMPatch.model_validate(
+                {
+                    "change_summary": (
+                        "供应商：华东机密供应商，联系人：张三，"
+                        "邮箱 secret@example.com，金额 100万元"
+                    ),
+                    "operations": [
+                        {
+                            "op": "add_node",
+                            "ref": f"external_node_{self.calls}",
+                            "node": {
+                                "type": "task",
+                                "label": "供应商：华东机密供应商",
+                            },
+                        }
+                    ],
+                }
+            ),
+            provider="fake-external",
+            model="fake-external-v1",
+        )
+
+
+class UngroundedProvider:
+    external = False
+
+    async def generate_patch(self, graph, instruction, locale, evidence=None):
+        del graph, instruction, locale, evidence
+        return ProviderResult(
+            patch=LLMPatch.model_validate(
+                {
+                    "change_summary": "增加未经证据支持的交易码。",
+                    "operations": [
+                        {
+                            "op": "add_node",
+                            "ref": "unverified",
+                            "node": {
+                                "type": "task",
+                                "label": "虚构步骤",
+                                "sap": {
+                                    "tcodes": [
+                                        {
+                                            "code": "ZFAKE",
+                                            "status": "verified",
+                                            "evidence_ref": "invented#zfake",
+                                        }
+                                    ]
+                                },
+                            },
+                        }
+                    ],
+                }
+            ),
+            provider="ungrounded",
+            model="test",
+        )
+
+
+class ExplodingKnowledgeService:
+    def search(self, *_args, **_kwargs):
+        raise FlowchartError(
+            "KNOWLEDGE_UNAVAILABLE",
+            "知识库暂时不可用，请稍后重试。",
+            status_code=503,
+        )
+
+
+class ExplodingProvider:
+    external = False
+
+    async def generate_patch(self, *_args, **_kwargs):
+        raise ProviderError("PROVIDER_UNAVAILABLE", "模型服务暂时不可用，请稍后重试。")
+
+
+@pytest.fixture
+def persistence_client(tmp_path) -> Iterator[tuple[TestClient, Database]]:
+    database = Database(f"sqlite:///{(tmp_path / 'blueprint.db').as_posix()}")
+
+    def override_repository() -> Iterator[BlueprintRepository]:
+        session = database.session_factory()
+        try:
+            yield BlueprintRepository(session)
+        finally:
+            session.close()
+
+    app.dependency_overrides[get_repository] = override_repository
+    try:
+        with TestClient(app) as client:
+            yield client, database
+    finally:
+        app.dependency_overrides.pop(get_repository, None)
+
+
+def _create_process(client: TestClient) -> str:
+    project_response = client.post(
+        "/api/v1/projects",
+        json={"name": "采购蓝图验收项目", "customer_name": "示例客户"},
+    )
+    assert project_response.status_code == 201, project_response.text
+    project_id = project_response.json()["id"]
+
+    process_response = client.post(
+        f"/api/v1/projects/{project_id}/processes",
+        json={"name": "直接物料 P2P", "module": "MM", "process_scope": "P2P"},
+    )
+    assert process_response.status_code == 201, process_response.text
+    assert process_response.json()["current_revision"] == 0
+    return process_response.json()["id"]
+
+
+def test_external_model_policy_requires_admin_opt_in_and_is_audited(persistence_client):
+    client, database = persistence_client
+    rejected_opt_in = client.post(
+        "/api/v1/projects",
+        json={"name": "绕过审计项目", "external_model_enabled": True},
+    )
+    assert rejected_opt_in.status_code == 422
+
+    created = client.post("/api/v1/projects", json={"name": "模型策略项目"})
+    assert created.status_code == 201, created.text
+    project = created.json()
+    project_id = project["id"]
+    assert project["external_model_enabled"] is False
+
+    for user_id, role in (
+        ("viewer-user", "viewer"),
+        ("editor-user", "editor"),
+        ("approver-user", "consultant_approver"),
+    ):
+        response = client.post(
+            f"/api/v1/projects/{project_id}/members",
+            json={"user_id": user_id, "role": role},
+        )
+        assert response.status_code == 201, response.text
+        headers = {"X-User-ID": user_id}
+        forbidden_update = client.put(
+            f"/api/v1/projects/{project_id}",
+            json={"external_model_enabled": True},
+            headers=headers,
+        )
+        assert forbidden_update.status_code == 403
+        forbidden_audit = client.get(
+            f"/api/v1/projects/{project_id}/audits",
+            headers=headers,
+        )
+        assert forbidden_audit.status_code == 403
+
+    outsider_headers = {"X-User-ID": "outsider-user"}
+    assert (
+        client.put(
+            f"/api/v1/projects/{project_id}",
+            json={"external_model_enabled": True},
+            headers=outsider_headers,
+        ).status_code
+        == 404
+    )
+
+    enabled = client.put(
+        f"/api/v1/projects/{project_id}",
+        json={"external_model_enabled": True},
+    )
+    assert enabled.status_code == 200, enabled.text
+    assert enabled.json()["external_model_enabled"] is True
+
+    unchanged = client.put(
+        f"/api/v1/projects/{project_id}",
+        json={"external_model_enabled": True},
+    )
+    assert unchanged.status_code == 200
+
+    disabled = client.put(
+        f"/api/v1/projects/{project_id}",
+        json={"external_model_enabled": False},
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["external_model_enabled"] is False
+
+    audits = client.get(f"/api/v1/projects/{project_id}/audits")
+    assert audits.status_code == 200, audits.text
+    assert [item["after_value"] for item in audits.json()] == [
+        {"external_model_enabled": False},
+        {"external_model_enabled": True},
+    ]
+    assert all(item["actor_user_id"] == "local-user" for item in audits.json())
+
+    session = database.session_factory()
+    try:
+        assert len(session.scalars(select(ProjectAuditRecord)).all()) == 2
+    finally:
+        session.close()
+
+
+def test_external_provider_is_blocked_by_default_and_sensitive_logs_are_redacted(
+    persistence_client,
+):
+    client, database = persistence_client
+    provider = TrackingExternalProvider()
+    app.dependency_overrides[get_provider] = lambda: provider
+    try:
+        project_response = client.post(
+            "/api/v1/projects",
+            json={"name": "敏感数据项目", "customer_name": "机密客户"},
+        )
+        assert project_response.status_code == 201, project_response.text
+        project_id = project_response.json()["id"]
+        process_response = client.post(
+            f"/api/v1/projects/{project_id}/processes",
+            json={"name": "脱敏验收流程"},
+        )
+        assert process_response.status_code == 201, process_response.text
+        process_id = process_response.json()["id"]
+
+        blocked = client.post(
+            f"/api/v1/processes/{process_id}/modify",
+            json={
+                "request_id": "external-blocked",
+                "base_revision": 0,
+                "instruction": "创建流程，联系人：李雷，电话 13800138000",
+            },
+        )
+        assert blocked.status_code == 200, blocked.text
+        assert provider.calls == 0
+        assert blocked.json()["metrics"]["provider"] == "local"
+        assert any("未启用外部模型" in item for item in blocked.json()["warnings"])
+
+        enabled = client.put(
+            f"/api/v1/projects/{project_id}",
+            json={"external_model_enabled": True},
+        )
+        assert enabled.status_code == 200, enabled.text
+        external = client.post(
+            f"/api/v1/processes/{process_id}/modify",
+            json={
+                "request_id": "external-enabled",
+                "base_revision": 1,
+                "instruction": (
+                    "创建采购订单 ME21N，联系供应商：华东机密供应商，联系人：张三，"
+                    "邮箱 secret@example.com，电话 13800138000，金额 100万元"
+                ),
+            },
+        )
+        assert external.status_code == 200, external.text
+        assert provider.calls == 1
+        assert provider.evidence
+        assert provider.evidence[0].source_id == "kb-mm-j45-project-seed"
+        assert external.json()["metrics"]["provider"] == "fake-external"
+        assert not any("未启用外部模型" in item for item in external.json()["warnings"])
+
+        session = database.session_factory()
+        try:
+            logs = session.scalars(select(ChangeLogRecord)).all()
+            log_text = " ".join(
+                " ".join(
+                    (
+                        item.user_prompt,
+                        item.decision_summary,
+                        str(item.normalized_patch),
+                    )
+                )
+                for item in logs
+            )
+            for sensitive_value in (
+                "华东机密供应商",
+                "张三",
+                "secret@example.com",
+                "13800138000",
+                "100万元",
+            ):
+                assert sensitive_value not in log_text
+            assert "[EMAIL_" in log_text
+            assert "[PHONE_" in log_text
+        finally:
+            session.close()
+    finally:
+        app.dependency_overrides.pop(get_provider, None)
+
+
+def test_ungrounded_provider_patch_is_rejected_without_creating_revision(
+    persistence_client,
+):
+    client, database = persistence_client
+    process_id = _create_process(client)
+    app.dependency_overrides[get_provider] = lambda: UngroundedProvider()
+    try:
+        response = client.post(
+            f"/api/v1/processes/{process_id}/modify",
+            json={
+                "request_id": "ungrounded-patch",
+                "base_revision": 0,
+                "instruction": "增加一个虚构交易码步骤",
+            },
+        )
+        assert response.status_code == 422, response.text
+        assert response.json()["error"]["code"] == "PATCH_EVIDENCE_INVALID"
+
+        process = client.get(f"/api/v1/processes/{process_id}")
+        assert process.status_code == 200
+        assert process.json()["current_revision"] == 0
+        session = database.session_factory()
+        try:
+            assert session.scalars(select(ChangeLogRecord)).all() == []
+        finally:
+            session.close()
+    finally:
+        app.dependency_overrides.pop(get_provider, None)
+
+
+def test_local_schema_backfills_legacy_project_owner_membership(persistence_client):
+    client, database = persistence_client
+    session = database.session_factory()
+    try:
+        session.add(
+            ProjectRecord(
+                id="legacy-project",
+                name="旧版开发项目",
+                customer_name=None,
+                sap_context=SapContext().model_dump(mode="json"),
+                created_by="legacy-owner",
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    response = client.get("/api/v1/projects", headers={"X-User-ID": "legacy-owner"})
+    assert response.status_code == 200
+    assert response.json()[0]["id"] == "legacy-project"
+    assert response.json()[0]["current_role"] == "project_admin"
+
+    session = database.session_factory()
+    try:
+        member = session.execute(select(ProjectMemberRecord)).scalar_one()
+        assert member.user_id == "legacy-owner"
+        assert member.role == "project_admin"
+    finally:
+        session.close()
+
+
+def test_persisted_modify_revision_release_and_changelog(persistence_client):
+    client, database = persistence_client
+    process_id = _create_process(client)
+
+    modify_response = client.post(
+        f"/api/v1/processes/{process_id}/modify",
+        json={
+            "request_id": "persisted-modify-1",
+            "base_revision": 0,
+            "instruction": "创建直接物料 P2P 流程",
+            "evidence_refs": ["kb-mm-j45#standard-steps"],
+        },
+    )
+    assert modify_response.status_code == 200, modify_response.text
+    payload = modify_response.json()
+    assert payload["base_revision"] == 0
+    assert payload["result_revision"] == 1
+    assert payload["graph"]["schema_version"] == "2.0"
+    assert payload["graph"]["nodes"]
+    assert payload["evidence"]
+    assert any(item["source_id"] == "kb-mm-j45-project-seed" for item in payload["evidence"])
+    purchase_order = next(
+        node for node in payload["graph"]["nodes"] if node["label"] == "创建采购订单"
+    )
+    assert purchase_order["sap"]["tcodes"][0]["status"] == "pending_confirmation"
+    assert purchase_order["sap"]["tcodes"][0]["evidence_ref"].startswith(
+        "kb-mm-j45-project-seed#"
+    )
+
+    markdown_export = client.post(
+        f"/api/v1/processes/{process_id}/exports",
+        json={"revision_no": 1, "format": "markdown"},
+    )
+    assert markdown_export.status_code == 200, markdown_export.text
+    assert "## 3. 流程步骤" in markdown_export.text
+    assert "ME21N" in markdown_export.text
+    markdown_disposition = markdown_export.headers["Content-Disposition"]
+    assert 'filename="SAP-Blueprint-process_' in markdown_disposition
+    markdown_filename = unquote(markdown_disposition.split("filename*=UTF-8''", 1)[1])
+    assert re.fullmatch(
+        r"SAP-Blueprint-直接物料 P2P-r1-\d{8}-\d{6}\.md",
+        markdown_filename,
+    )
+
+    docx_export = client.post(
+        f"/api/v1/processes/{process_id}/exports",
+        json={"revision_no": 1, "format": "docx"},
+    )
+    assert docx_export.status_code == 200, docx_export.text
+    assert docx_export.content.startswith(b"PK")
+    document = Document(BytesIO(docx_export.content))
+    document_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    assert "流程步骤" in document_text
+    assert any("ME21N" in cell.text for table in document.tables for row in table.rows for cell in row.cells)
+    steps_table = next(
+        table
+        for table in document.tables
+        if any(cell.text == "步骤" for cell in table.rows[0].cells)
+    )
+    assert len(steps_table.rows) - 1 == len(payload["graph"]["nodes"])
+    word_cells = "\n".join(
+        cell.text for table in document.tables for row in table.rows for cell in row.cells
+    )
+    for node in payload["graph"]["nodes"]:
+        assert node["label"] in markdown_export.text
+        assert node["label"] in word_cells
+    assert "修订号：1" in markdown_export.text
+    assert any(
+        row.cells[0].text == "修订号" and row.cells[1].text == "1"
+        for table in document.tables
+        for row in table.rows
+    )
+    assert "当前修订没有 GAP 候选或正式 GAP。" in markdown_export.text
+    assert "当前修订没有 GAP 候选或正式 GAP。" in document_text
+    docx_disposition = docx_export.headers["Content-Disposition"]
+    docx_filename = unquote(docx_disposition.split("filename*=UTF-8''", 1)[1])
+    assert re.fullmatch(
+        r"SAP-Blueprint-直接物料 P2P-r1-\d{8}-\d{6}\.docx",
+        docx_filename,
+    )
+
+    revisions = client.get(f"/api/v1/processes/{process_id}/revisions")
+    assert revisions.status_code == 200, revisions.text
+    assert [item["revision_no"] for item in revisions.json()] == [1, 0]
+
+    revision_detail = client.get(f"/api/v1/processes/{process_id}/revisions/1")
+    assert revision_detail.status_code == 200, revision_detail.text
+    assert revision_detail.json()["graph"] == payload["graph"]
+
+    session = database.session_factory()
+    try:
+        changelog = session.execute(select(ChangeLogRecord)).scalar_one()
+        assert changelog.decision_summary
+        assert "kb-mm-j45#standard-steps" in changelog.evidence_refs
+        assert any(
+            item.startswith("kb-mm-j45-project-seed#")
+            for item in changelog.evidence_refs
+        )
+        assert not hasattr(changelog, "ai_reasoning")
+    finally:
+        session.close()
+
+    release_response = client.post(
+        f"/api/v1/processes/{process_id}/releases",
+        json={"base_revision": 1},
+    )
+    assert release_response.status_code == 201, release_response.text
+    assert release_response.json()["release_no"] == 1
+    assert release_response.json()["lifecycle_state"] == "APPROVED"
+
+    release_detail = client.get(f"/api/v1/processes/{process_id}/releases/1")
+    assert release_detail.status_code == 200, release_detail.text
+    assert release_detail.json()["release_no"] == 1
+
+    double_release = client.post(
+        f"/api/v1/processes/{process_id}/releases",
+        json={"base_revision": 1},
+    )
+    assert double_release.status_code == 409
+    assert double_release.json()["error"]["code"] == "REVISION_ALREADY_RELEASED"
+
+    draft = client.post(
+        f"/api/v1/processes/{process_id}/drafts",
+        json={"source_revision": 1},
+    )
+    assert draft.status_code == 201, draft.text
+    assert draft.json()["revision_no"] == 2
+    assert draft.json()["release_no"] is None
+    assert draft.json()["lifecycle_state"] == "DRAFT"
+    assert draft.json()["graph"]["version"] == 2
+
+    released_snapshot = client.get(f"/api/v1/processes/{process_id}/releases/1")
+    assert released_snapshot.status_code == 200
+    assert released_snapshot.json()["graph"]["version"] == 1
+
+
+def test_persisted_modify_rejects_stale_revision(persistence_client):
+    client, _ = persistence_client
+    process_id = _create_process(client)
+
+    first = client.post(
+        f"/api/v1/processes/{process_id}/modify",
+        json={
+            "request_id": "persisted-modify-first",
+            "base_revision": 0,
+            "instruction": "增加一个财务泳道",
+        },
+    )
+    assert first.status_code == 200, first.text
+
+    stale = client.post(
+        f"/api/v1/processes/{process_id}/modify",
+        json={
+            "request_id": "persisted-modify-stale",
+            "base_revision": 0,
+            "instruction": "增加一个采购泳道",
+        },
+    )
+    assert stale.status_code == 409, stale.text
+    assert stale.json()["error"]["code"] == "REVISION_CONFLICT"
+    assert stale.json()["error"]["details"] == {
+        "expected_revision": 0,
+        "current_revision": 1,
+    }
+
+
+def test_database_write_failure_rolls_back_process_revision_and_changelog(
+    persistence_client,
+):
+    client, database = persistence_client
+    process_id = _create_process(client)
+    process_response = client.get(f"/api/v1/processes/{process_id}")
+    graph = process_response.json()["graph"]
+    graph["version"] = 1
+    graph["title"] = "不应保存的流程标题"
+
+    def fail_change_log_insert(*_args) -> None:
+        raise OperationalError(
+            "INSERT INTO change_log",
+            {},
+            RuntimeError("simulated database detail must stay private"),
+        )
+
+    event.listen(ChangeLogRecord, "before_insert", fail_change_log_insert)
+    try:
+        response = client.post(
+            f"/api/v1/processes/{process_id}/save",
+            headers={"X-Request-ID": "database-failure-rollback"},
+            json={
+                "request_id": "database-failure-rollback",
+                "base_revision": 0,
+                "graph": graph,
+                "summary": "触发事务回滚",
+            },
+        )
+    finally:
+        event.remove(ChangeLogRecord, "before_insert", fail_change_log_insert)
+
+    assert response.status_code == 503, response.text
+    assert response.headers["X-Request-ID"] == "database-failure-rollback"
+    assert response.json()["error"] == {
+        "code": "DATABASE_WRITE_FAILED",
+        "message": "数据库写入失败，未保存任何更改，请稍后重试。",
+        "request_id": "database-failure-rollback",
+        "details": {},
+    }
+    assert "simulated database detail" not in response.text
+
+    session = database.session_factory()
+    try:
+        process = session.get(ProcessRecord, process_id)
+        assert process is not None
+        assert process.current_revision == 0
+        assert process.status == "DRAFT"
+        assert session.scalar(
+            select(func.count()).select_from(ProcessRevisionRecord)
+        ) == 1
+        assert session.scalar(select(func.count()).select_from(ChangeLogRecord)) == 0
+    finally:
+        session.close()
+
+
+def test_dependency_or_export_failures_keep_current_graph_available(
+    persistence_client, monkeypatch
+):
+    client, database = persistence_client
+    process_id = _create_process(client)
+
+    app.dependency_overrides[get_provider] = lambda: ExplodingProvider()
+    try:
+        provider_failure = client.post(
+            f"/api/v1/processes/{process_id}/modify",
+            json={
+                "request_id": "provider-failure-persisted",
+                "base_revision": 0,
+                "instruction": "增加一个审批步骤",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_provider, None)
+    assert provider_failure.status_code == 502, provider_failure.text
+    assert provider_failure.json()["error"]["code"] == "PROVIDER_UNAVAILABLE"
+
+    app.dependency_overrides[get_knowledge_service] = lambda: ExplodingKnowledgeService()
+    try:
+        knowledge_failure = client.post(
+            f"/api/v1/processes/{process_id}/modify",
+            json={
+                "request_id": "knowledge-failure-persisted",
+                "base_revision": 0,
+                "instruction": "增加一个审批步骤",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_knowledge_service, None)
+    assert knowledge_failure.status_code == 503, knowledge_failure.text
+    assert knowledge_failure.json()["error"]["code"] == "KNOWLEDGE_UNAVAILABLE"
+
+    def fail_docx_render(_model):
+        raise RuntimeError("private export rendering detail")
+
+    monkeypatch.setattr(projects_route, "render_docx", fail_docx_render)
+    export_failure = client.post(
+        f"/api/v1/processes/{process_id}/exports",
+        json={"revision_no": 0, "format": "docx"},
+    )
+    assert export_failure.status_code == 500, export_failure.text
+    assert export_failure.json()["error"]["code"] == "INTERNAL_SERVER_ERROR"
+    assert "private export rendering detail" not in export_failure.text
+
+    current = client.get(f"/api/v1/processes/{process_id}")
+    assert current.status_code == 200, current.text
+    assert current.json()["current_revision"] == 0
+    assert current.json()["graph"]["version"] == 0
+
+    session = database.session_factory()
+    try:
+        assert session.scalar(select(func.count()).select_from(ProcessRevisionRecord)) == 1
+        assert session.scalar(select(func.count()).select_from(ChangeLogRecord)) == 0
+    finally:
+        session.close()
+
+
+def test_gap_decision_is_audited_and_requires_valid_lifecycle(persistence_client):
+    client, database = persistence_client
+    graph = {
+        "schema_version": "2.0",
+        "graph_id": "gap-graph",
+        "version": 0,
+        "title": "GAP 流程",
+        "module": "MM",
+        "process_scope": "P2P",
+        "sap_context": {},
+        "direction": "TB",
+        "nodes": [
+            {
+                "id": "gap-node",
+                "type": "task",
+                "label": "审批",
+                "sap": {
+                    "gap": {
+                        "status": "candidate",
+                        "description": "动态审批",
+                        "evidence_refs": ["kb-gap"],
+                    }
+                },
+            }
+        ],
+        "edges": [],
+        "lanes": [],
+        "layout": {},
+    }
+    gap_project = client.post(
+        "/api/v1/projects", json={"name": "GAP 决策项目"}
+    )
+    assert gap_project.status_code == 201, gap_project.text
+    project_id = gap_project.json()["id"]
+    process_response = client.post(
+        f"/api/v1/projects/{project_id}/processes",
+        json={"name": "GAP 流程 2", "initial_graph": graph},
+    )
+    assert process_response.status_code == 201, process_response.text
+    process_id = process_response.json()["id"]
+    decision = client.post(
+        f"/api/v1/processes/{process_id}/gaps/gap-node/decisions",
+        json={"base_revision": 0, "to_status": "confirmed", "comment": "顾问确认差异"},
+    )
+    assert decision.status_code == 200, decision.text
+    assert decision.json()["to_status"] == "confirmed"
+    assert decision.json()["graph"]["nodes"][0]["sap"]["gap"]["status"] == "confirmed"
+
+    session = database.session_factory()
+    try:
+        audited = session.execute(select(GapDecisionRecord)).scalar_one()
+        assert audited.comment == "顾问确认差异"
+        assert audited.decided_by == "local-user"
+        human_change = session.execute(
+            select(ChangeLogRecord).where(ChangeLogRecord.provider == "human")
+        ).scalar_one()
+        assert human_change.model == "manual"
+    finally:
+        session.close()
+
+    invalid = client.post(
+        f"/api/v1/processes/{process_id}/gaps/gap-node/decisions",
+        json={"base_revision": 1, "to_status": "confirmed", "comment": "重复确认"},
+    )
+    assert invalid.status_code == 409
+    assert invalid.json()["error"]["code"] == "GAP_INVALID_TRANSITION"
+
+
+def test_project_roles_are_loaded_from_membership_and_isolate_projects(persistence_client):
+    client, _ = persistence_client
+    project_response = client.post("/api/v1/projects", json={"name": "权限验收项目"})
+    assert project_response.status_code == 201, project_response.text
+    project_id = project_response.json()["id"]
+    assert project_response.json()["current_role"] == "project_admin"
+
+    process_response = client.post(
+        f"/api/v1/projects/{project_id}/processes",
+        json={"name": "权限验收流程"},
+    )
+    assert process_response.status_code == 201, process_response.text
+    process_id = process_response.json()["id"]
+
+    add_viewer = client.post(
+        f"/api/v1/projects/{project_id}/members",
+        json={"user_id": "viewer-user", "role": "viewer"},
+    )
+    assert add_viewer.status_code == 201, add_viewer.text
+    assert add_viewer.json()["role"] == "viewer"
+
+    spoofed_headers = {
+        "X-User-ID": "viewer-user",
+        "X-Project-Role": "project_admin",
+    }
+    visible_projects = client.get("/api/v1/projects", headers=spoofed_headers)
+    assert visible_projects.status_code == 200
+    assert visible_projects.json()[0]["current_role"] == "viewer"
+    assert client.get(f"/api/v1/processes/{process_id}", headers=spoofed_headers).status_code == 200
+
+    forbidden_create = client.post(
+        f"/api/v1/projects/{project_id}/processes",
+        json={"name": "越权流程"},
+        headers=spoofed_headers,
+    )
+    assert forbidden_create.status_code == 403
+    assert forbidden_create.json()["error"]["code"] == "PROJECT_PERMISSION_DENIED"
+    forbidden_members = client.get(
+        f"/api/v1/projects/{project_id}/members", headers=spoofed_headers
+    )
+    assert forbidden_members.status_code == 403
+    knowledge_request = {
+        "module": "MM",
+        "process_scope": "P2P",
+        "query": "采购申请审批",
+        "sap_context": {},
+        "top_k": 3,
+    }
+    forbidden_knowledge = client.post(
+        f"/api/v1/projects/{project_id}/knowledge/search",
+        json=knowledge_request,
+        headers=spoofed_headers,
+    )
+    assert forbidden_knowledge.status_code == 403
+
+    outsider_headers = {"X-User-ID": "outsider-user"}
+    assert client.get("/api/v1/projects", headers=outsider_headers).json() == []
+    hidden_process = client.get(
+        f"/api/v1/processes/{process_id}", headers=outsider_headers
+    )
+    assert hidden_process.status_code == 404
+    assert hidden_process.json()["error"]["code"] == "PROJECT_NOT_FOUND"
+    hidden_export = client.post(
+        f"/api/v1/processes/{process_id}/exports",
+        json={"revision_no": 0, "format": "markdown"},
+        headers=outsider_headers,
+    )
+    assert hidden_export.status_code == 404
+    hidden_knowledge = client.post(
+        f"/api/v1/projects/{project_id}/knowledge/search",
+        json=knowledge_request,
+        headers=outsider_headers,
+    )
+    assert hidden_knowledge.status_code == 404
+
+    update_viewer = client.put(
+        f"/api/v1/projects/{project_id}/members/viewer-user",
+        json={"user_id": "viewer-user", "role": "editor"},
+    )
+    assert update_viewer.status_code == 200
+    editor_headers = {"X-User-ID": "viewer-user"}
+    editor_create = client.post(
+        f"/api/v1/projects/{project_id}/processes",
+        json={"name": "编辑者流程"},
+        headers=editor_headers,
+    )
+    assert editor_create.status_code == 201, editor_create.text
+    editor_knowledge = client.post(
+        f"/api/v1/projects/{project_id}/knowledge/search",
+        json=knowledge_request,
+        headers=editor_headers,
+    )
+    assert editor_knowledge.status_code == 200, editor_knowledge.text
+    editor_release = client.post(
+        f"/api/v1/processes/{process_id}/releases",
+        json={"base_revision": 0},
+        headers=editor_headers,
+    )
+    assert editor_release.status_code == 403
+
+    last_admin = client.put(
+        f"/api/v1/projects/{project_id}/members/local-user",
+        json={"user_id": "local-user", "role": "editor"},
+    )
+    assert last_admin.status_code == 409
+    assert last_admin.json()["error"]["code"] == "LAST_PROJECT_ADMIN"
+    remove_last_admin = client.delete(
+        f"/api/v1/projects/{project_id}/members/local-user"
+    )
+    assert remove_last_admin.status_code == 409
+    assert remove_last_admin.json()["error"]["code"] == "LAST_PROJECT_ADMIN"
+
+
+def test_gap_status_requires_decision_and_release_requires_decision_audit(persistence_client):
+    client, _ = persistence_client
+    project_response = client.post("/api/v1/projects", json={"name": "发布预检项目"})
+    project_id = project_response.json()["id"]
+    graph = {
+        "schema_version": "2.0",
+        "graph_id": "release-gap-graph",
+        "version": 0,
+        "title": "发布 GAP 流程",
+        "module": "MM",
+        "process_scope": "P2P",
+        "sap_context": {},
+        "direction": "LR",
+        "nodes": [
+            {"id": "start", "type": "start", "label": "开始"},
+            {
+                "id": "approval",
+                "type": "task",
+                "label": "采购审批",
+                "sap": {
+                    "gap": {
+                        "status": "candidate",
+                        "description": "需要定制审批",
+                        "evidence_refs": ["kb-gap-approval"],
+                    }
+                },
+            },
+            {"id": "end", "type": "end", "label": "结束"},
+        ],
+        "edges": [
+            {"id": "e1", "source": "start", "target": "approval"},
+            {"id": "e2", "source": "approval", "target": "end"},
+        ],
+        "lanes": [],
+        "layout": {},
+    }
+    process_response = client.post(
+        f"/api/v1/projects/{project_id}/processes",
+        json={"name": "发布 GAP 流程", "initial_graph": graph},
+    )
+    assert process_response.status_code == 201, process_response.text
+    process_id = process_response.json()["id"]
+
+    direct_graph = process_response.json()["graph"]
+    direct_graph["version"] = 1
+    direct_graph["nodes"][1]["sap"]["gap"]["status"] = "confirmed"
+    direct_save = client.post(
+        f"/api/v1/processes/{process_id}/save",
+        json={
+            "request_id": "direct-confirm",
+            "base_revision": 0,
+            "graph": direct_graph,
+            "summary": "直接确认 GAP",
+        },
+    )
+    assert direct_save.status_code == 409
+    assert direct_save.json()["error"]["code"] == "GAP_DECISION_REQUIRED"
+
+    decision = client.post(
+        f"/api/v1/processes/{process_id}/gaps/approval/decisions",
+        json={
+            "base_revision": 0,
+            "to_status": "confirmed",
+            "comment": "顾问确认需要定制审批",
+        },
+    )
+    assert decision.status_code == 200, decision.text
+    release = client.post(
+        f"/api/v1/processes/{process_id}/releases",
+        json={"base_revision": 1},
+    )
+    assert release.status_code == 201, release.text
+
+    unaudited_graph = graph.copy()
+    unaudited_graph["graph_id"] = "unaudited-gap-graph"
+    unaudited_graph["nodes"] = [dict(node) for node in graph["nodes"]]
+    unaudited_graph["nodes"][1] = {
+        **unaudited_graph["nodes"][1],
+        "sap": {
+            "gap": {
+                "status": "confirmed",
+                "description": "未经决策直接确认",
+                "evidence_refs": ["kb-gap-approval"],
+            }
+        },
+    }
+    unaudited_process = client.post(
+        f"/api/v1/projects/{project_id}/processes",
+        json={"name": "未审计 GAP 流程", "initial_graph": unaudited_graph},
+    )
+    assert unaudited_process.status_code == 201, unaudited_process.text
+    unaudited_release = client.post(
+        f"/api/v1/processes/{unaudited_process.json()['id']}/releases",
+        json={"base_revision": 0},
+    )
+    assert unaudited_release.status_code == 422
+    assert unaudited_release.json()["error"]["code"] == "RELEASE_PREFLIGHT_FAILED"
+    assert unaudited_release.json()["error"]["details"]["gap_without_decision_audit"]

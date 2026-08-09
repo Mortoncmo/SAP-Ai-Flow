@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from app.models.graph import GraphDocument
+from app.models.knowledge import KnowledgeEvidence
 from app.models.patch import LLMPatch
 
 
@@ -19,4 +20,5 @@ class LLMProvider(Protocol):
         graph: GraphDocument,
         instruction: str,
         locale: str,
+        evidence: list[KnowledgeEvidence] | None = None,
     ) -> ProviderResult: ...

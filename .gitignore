@@ -21,6 +21,7 @@ vite.config.d.ts
 .env
 .env.local
 *.local
+*.db
 
 # Editors and OS
 .idea/

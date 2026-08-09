@@ -32,6 +32,28 @@ export function downloadUrl(url: string, filename: string) {
   anchor.click()
 }
 
+export function parseDownloadFilename(disposition: string, fallback: string): string {
+  const encodedMatch = disposition.match(/filename\*\s*=\s*(?:UTF-8'')?("[^"]+"|[^;]+)/i)
+  const basicMatch = disposition.match(/filename\s*=\s*("[^"]+"|[^;]+)/i)
+  const rawValue = encodedMatch?.[1] ?? basicMatch?.[1]
+  if (!rawValue) return fallback
+
+  const unquoted = rawValue.trim().replace(/^"|"$/g, '')
+  let decoded = unquoted
+  if (encodedMatch) {
+    try {
+      decoded = decodeURIComponent(unquoted)
+    } catch {
+      return fallback
+    }
+  }
+  const safe = decoded
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return safe && !/^\.+$/.test(safe) ? safe : fallback
+}
+
 function pad(value: number): string {
   return String(value).padStart(2, '0')
 }

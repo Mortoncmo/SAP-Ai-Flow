@@ -1,4 +1,22 @@
-import type { GraphDocument, ModifyResponse } from '../types'
+import type {
+  GapAnalyzeResponse,
+  GraphDocument,
+  KnowledgeSearchResponse,
+  ModifyResponse,
+  ManualSaveResponse,
+  PersistedModifyResponse,
+  ProcessDetail,
+  ProcessSummary,
+  ProjectSummary,
+  ReleaseResponse,
+  RevisionSummary,
+  RevisionDetail,
+  GapDecisionResponse,
+  ProjectMember,
+  ProjectRole,
+} from '../types'
+import { parseDownloadFilename } from '../export'
+import { getAccessToken } from '../auth/oidc'
 
 const API_ROOT = import.meta.env.VITE_API_URL ?? ''
 
@@ -17,9 +35,9 @@ export async function modifyFlowchart(
   signal?: AbortSignal,
 ): Promise<ModifyResponse> {
   const requestId = `request_${crypto.randomUUID().replaceAll('-', '')}`
-  const response = await fetch(`${API_ROOT}/api/v1/flowcharts/modify`, {
+  const response = await authorizedFetch(`${API_ROOT}/api/v1/flowcharts/modify`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Request-ID': requestId },
     body: JSON.stringify({
       request_id: requestId,
       current_graph: graph,
@@ -37,4 +55,324 @@ export async function modifyFlowchart(
     )
   }
   return payload as ModifyResponse
+}
+
+export async function searchSapKnowledge(
+  graph: GraphDocument,
+  query: string,
+  projectId?: string,
+  signal?: AbortSignal,
+): Promise<KnowledgeSearchResponse> {
+  return postJson<KnowledgeSearchResponse>(
+    projectId
+      ? `/api/v1/projects/${encodeURIComponent(projectId)}/knowledge/search`
+      : '/api/v1/knowledge/search',
+    {
+      module: graph.module,
+      process_scope: graph.process_scope,
+      query,
+      sap_context: graph.sap_context,
+      top_k: 5,
+    },
+    signal,
+  )
+}
+
+export async function analyzeGapCandidate(
+  graph: GraphDocument,
+  businessRequirement: string,
+  projectId?: string,
+  signal?: AbortSignal,
+): Promise<GapAnalyzeResponse> {
+  return postJson<GapAnalyzeResponse>(
+    projectId
+      ? `/api/v1/projects/${encodeURIComponent(projectId)}/gaps/analyze`
+      : '/api/v1/gaps/analyze',
+    {
+      module: graph.module,
+      process_scope: graph.process_scope,
+      business_requirement: businessRequirement,
+      sap_context: graph.sap_context,
+    },
+    signal,
+  )
+}
+
+export async function listProjects(signal?: AbortSignal): Promise<ProjectSummary[]> {
+  return getJson<ProjectSummary[]>('/api/v1/projects', signal)
+}
+
+export async function createProject(
+  name: string,
+  customerName?: string,
+  signal?: AbortSignal,
+): Promise<ProjectSummary> {
+  return postJson<ProjectSummary>(
+    '/api/v1/projects',
+    { name, customer_name: customerName || null },
+    signal,
+  )
+}
+
+export async function updateProjectSettings(
+  projectId: string,
+  externalModelEnabled: boolean,
+  signal?: AbortSignal,
+): Promise<ProjectSummary> {
+  return putJson<ProjectSummary>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}`,
+    { external_model_enabled: externalModelEnabled },
+    signal,
+  )
+}
+
+export async function listProjectMembers(
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ProjectMember[]> {
+  return getJson<ProjectMember[]>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/members`,
+    signal,
+  )
+}
+
+export async function addProjectMember(
+  projectId: string,
+  userId: string,
+  role: ProjectRole,
+  signal?: AbortSignal,
+): Promise<ProjectMember> {
+  return postJson<ProjectMember>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/members`,
+    { user_id: userId, role },
+    signal,
+  )
+}
+
+export async function updateProjectMember(
+  projectId: string,
+  userId: string,
+  role: ProjectRole,
+  signal?: AbortSignal,
+): Promise<ProjectMember> {
+  return putJson<ProjectMember>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`,
+    { user_id: userId, role },
+    signal,
+  )
+}
+
+export async function removeProjectMember(
+  projectId: string,
+  userId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  await requestJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`,
+    { method: 'DELETE', signal },
+  )
+}
+
+export async function listProcesses(
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ProcessSummary[]> {
+  return getJson<ProcessSummary[]>(`/api/v1/projects/${encodeURIComponent(projectId)}/processes`, signal)
+}
+
+export async function createProcess(
+  projectId: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<ProcessDetail> {
+  return postJson<ProcessDetail>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/processes`,
+    { name, module: 'MM', process_scope: 'P2P' },
+    signal,
+  )
+}
+
+export async function getProcess(processId: string, signal?: AbortSignal): Promise<ProcessDetail> {
+  return getJson<ProcessDetail>(`/api/v1/processes/${encodeURIComponent(processId)}`, signal)
+}
+
+export async function modifyPersistedFlow(
+  processId: string,
+  baseRevision: number,
+  instruction: string,
+  signal?: AbortSignal,
+): Promise<PersistedModifyResponse> {
+  const requestId = createRequestId()
+  return postJson<PersistedModifyResponse>(
+    `/api/v1/processes/${encodeURIComponent(processId)}/modify`,
+    {
+      request_id: requestId,
+      base_revision: baseRevision,
+      instruction,
+      locale: 'zh-CN',
+    },
+    signal,
+    requestId,
+  )
+}
+
+export async function savePersistedFlow(
+  processId: string,
+  baseRevision: number,
+  graph: GraphDocument,
+  summary = '保存画布修订',
+  signal?: AbortSignal,
+): Promise<ManualSaveResponse> {
+  const requestId = createRequestId()
+  return postJson<ManualSaveResponse>(
+    `/api/v1/processes/${encodeURIComponent(processId)}/save`,
+    {
+      request_id: requestId,
+      base_revision: baseRevision,
+      graph: { ...graph, version: baseRevision + 1 },
+      summary,
+    },
+    signal,
+    requestId,
+  )
+}
+
+export async function listRevisions(
+  processId: string,
+  signal?: AbortSignal,
+): Promise<RevisionSummary[]> {
+  return getJson<RevisionSummary[]>(`/api/v1/processes/${encodeURIComponent(processId)}/revisions`, signal)
+}
+
+export async function getRevision(
+  processId: string,
+  revisionNo: number,
+  signal?: AbortSignal,
+): Promise<RevisionDetail> {
+  return getJson<RevisionDetail>(
+    `/api/v1/processes/${encodeURIComponent(processId)}/revisions/${revisionNo}`,
+    signal,
+  )
+}
+
+export async function releaseProcess(
+  processId: string,
+  baseRevision: number,
+  signal?: AbortSignal,
+): Promise<ReleaseResponse> {
+  return postJson<ReleaseResponse>(
+    `/api/v1/processes/${encodeURIComponent(processId)}/releases`,
+    { base_revision: baseRevision },
+    signal,
+  )
+}
+
+export async function createDraftFromRelease(
+  processId: string,
+  sourceRevision: number,
+  signal?: AbortSignal,
+): Promise<RevisionDetail> {
+  return postJson<RevisionDetail>(
+    `/api/v1/processes/${encodeURIComponent(processId)}/drafts`,
+    { source_revision: sourceRevision },
+    signal,
+  )
+}
+
+export async function decideGap(
+  processId: string,
+  nodeId: string,
+  baseRevision: number,
+  toStatus: 'confirmed' | 'rejected' | 'resolved',
+  comment: string,
+  signal?: AbortSignal,
+): Promise<GapDecisionResponse> {
+  return postJson<GapDecisionResponse>(
+    `/api/v1/processes/${encodeURIComponent(processId)}/gaps/${encodeURIComponent(nodeId)}/decisions`,
+    { base_revision: baseRevision, to_status: toStatus, comment },
+    signal,
+  )
+}
+
+export async function exportBlueprint(
+  processId: string,
+  revisionNo: number,
+  format: 'markdown' | 'docx',
+  signal?: AbortSignal,
+): Promise<{ blob: Blob; filename: string }> {
+  const response = await authorizedFetch(`${API_ROOT}/api/v1/processes/${encodeURIComponent(processId)}/exports`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ revision_no: revisionNo, format }),
+    signal,
+  })
+  if (!response.ok) {
+    const payload = await response.json()
+    throw new ApiError(payload?.error?.message ?? '蓝图导出失败。', payload?.error?.code)
+  }
+  const disposition = response.headers.get('Content-Disposition') ?? ''
+  const filename = parseDownloadFilename(
+    disposition,
+    `SAP-Blueprint.${format === 'docx' ? 'docx' : 'md'}`,
+  )
+  return { blob: await response.blob(), filename }
+}
+
+async function postJson<T>(
+  path: string,
+  body: unknown,
+  signal?: AbortSignal,
+  requestId?: string,
+): Promise<T> {
+  return requestJson<T>(path, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(requestId ? { 'X-Request-ID': requestId } : {}),
+    },
+    body: JSON.stringify(body),
+    signal,
+  })
+}
+
+async function putJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  return requestJson<T>(path, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  })
+}
+
+async function requestJson<T>(path: string, init: RequestInit): Promise<T> {
+  const response = await authorizedFetch(`${API_ROOT}${path}`, init)
+  if (response.status === 204) return undefined as T
+  const payload = await response.json()
+  if (!response.ok) {
+    throw new ApiError(payload?.error?.message ?? '请求失败，请稍后重试。', payload?.error?.code)
+  }
+  return payload as T
+}
+
+async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const response = await authorizedFetch(`${API_ROOT}${path}`, { signal })
+  const payload = await response.json()
+  if (!response.ok) {
+    throw new ApiError(payload?.error?.message ?? '请求失败，请稍后重试。', payload?.error?.code)
+  }
+  return payload as T
+}
+
+async function authorizedFetch(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
+  const accessToken = await getAccessToken()
+  const headers = new Headers(init.headers)
+  if (!headers.has('X-Request-ID')) {
+    headers.set('X-Request-ID', `web_${crypto.randomUUID().replaceAll('-', '')}`)
+  }
+  if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
+  return fetch(input, { ...init, headers })
+}
+
+function createRequestId(): string {
+  return `web_${crypto.randomUUID().replaceAll('-', '')}`
 }

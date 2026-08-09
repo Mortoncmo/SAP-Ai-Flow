@@ -7,7 +7,9 @@ from app.agent.base import ProviderResult
 from app.core.config import Settings
 from app.core.errors import ProviderError
 from app.models.graph import GraphDocument
+from app.models.knowledge import KnowledgeEvidence
 from app.models.patch import LLMPatch
+from app.security.redaction import SensitiveDataRedactor
 
 SYSTEM_PROMPT = """你是 SAP 业务流程建模助手。根据 current_graph 和 instruction，只输出 JSON Patch。
 必须保留未被指令涉及的节点与连线。禁止输出 Markdown、解释文字或思维过程。
@@ -15,11 +17,16 @@ SYSTEM_PROMPT = """你是 SAP 业务流程建模助手。根据 current_graph �
 合法节点类型：start、end、task、decision、subprocess。
 节点可选 icon：user、building、shield-check、file-text、package、truck、circle-dollar-sign、clipboard-check。
 节点可通过 lane_id 归属泳道。创建泳道后使用 @ref 在同一 Patch 中引用。
+节点可以包含 sap 元数据：step_type、tcodes、fiori_apps、roles、configuration_points、best_practice_refs 和 gap。
+SAP 专业字段必须有当前输入中的证据，无法确认时使用 pending_confirmation，禁止凭记忆捏造 T-Code、Fiori App、配置点或 BAdI。
+GAP 只能输出 candidate，不得输出 confirmed、resolved 或 rejected。
 合法操作：add_node、remove_node、update_node、add_edge、remove_edge、add_lane、update_lane、remove_lane。
 输出字段必须是 change_summary 和 operations，并严格遵循提供的 JSON Schema。"""
 
 
 class DeepSeekProvider:
+    external = True
+
     def __init__(self, settings: Settings) -> None:
         if not settings.deepseek_api_key:
             raise ProviderError(
@@ -33,15 +40,16 @@ class DeepSeekProvider:
         graph: GraphDocument,
         instruction: str,
         locale: str,
+        evidence: list[KnowledgeEvidence] | None = None,
     ) -> ProviderResult:
         schema = LLMPatch.model_json_schema()
-        graph_data = graph.model_dump(exclude={"layout"}, mode="json")
-        user_payload = {
-            "locale": locale,
-            "current_graph": graph_data,
-            "instruction": instruction,
-            "output_schema": schema,
-        }
+        user_payload = self._build_user_payload(
+            graph,
+            instruction,
+            locale,
+            schema,
+            evidence or [],
+        )
         attempts = 0
         last_error = ""
         max_attempts = self.settings.llm_max_retries + 1
@@ -91,3 +99,23 @@ class DeepSeekProvider:
             "DeepSeek 未返回可用的结构化 Patch。",
             details={"attempts": attempts, "reason": last_error},
         )
+
+    @staticmethod
+    def _build_user_payload(
+        graph: GraphDocument,
+        instruction: str,
+        locale: str,
+        schema: dict[str, object],
+        evidence: list[KnowledgeEvidence] | None = None,
+    ) -> dict[str, object]:
+        redactor = SensitiveDataRedactor()
+        graph_data = graph.model_dump(exclude={"layout"}, mode="json")
+        return {
+            "locale": locale,
+            "current_graph": redactor.redact_value(graph_data),
+            "instruction": redactor.redact_text(instruction),
+            "evidence": redactor.redact_value(
+                [item.model_dump(mode="json") for item in evidence or []]
+            ),
+            "output_schema": schema,
+        }

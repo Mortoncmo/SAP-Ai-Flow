@@ -2,7 +2,7 @@ import pytest
 
 from app.core.errors import PatchError
 from app.graph.patcher import apply_patch
-from app.models.graph import NodeType, Swimlane
+from app.models.graph import GapStatus, NodeType, Swimlane
 from app.models.patch import LLMPatch
 
 
@@ -133,3 +133,60 @@ def test_removing_lane_keeps_nodes_and_clears_assignment(order_graph):
 
     assert updated.lanes == []
     assert next(node for node in updated.nodes if node.id == "submit").lane_id is None
+
+
+def test_patch_preserves_and_updates_sap_metadata(order_graph):
+    patch = LLMPatch.model_validate(
+        {
+            "change_summary": "补充采购订单 SAP 元数据",
+            "operations": [
+                {
+                    "op": "update_node",
+                    "id": "submit",
+                    "changes": {
+                        "sap": {
+                            "step_type": "transaction",
+                            "tcodes": [
+                                {
+                                    "code": "ME21N",
+                                    "status": "pending_confirmation",
+                                    "evidence_ref": "kb-mm-j45-po",
+                                }
+                            ],
+                            "roles": ["Purchaser"],
+                        }
+                    },
+                }
+            ],
+        }
+    )
+
+    updated = apply_patch(order_graph, patch)
+
+    submit = next(node for node in updated.nodes if node.id == "submit")
+    assert submit.sap.step_type == "transaction"
+    assert submit.sap.tcodes[0].code == "ME21N"
+    assert submit.sap.tcodes[0].evidence_ref == "kb-mm-j45-po"
+    assert submit.sap.gap.status == GapStatus.NONE
+    assert order_graph.nodes[1].sap.tcodes == []
+
+
+def test_graph_document_migrates_legacy_schema(order_graph):
+    graph = {
+        "schema_version": "1.0",
+        "graph_id": "legacy",
+        "version": 1,
+        "title": "旧流程",
+        "direction": "TB",
+        "nodes": [{"id": "start", "type": "start", "label": "开始"}],
+        "edges": [],
+        "lanes": [],
+        "layout": {},
+    }
+
+    migrated = type(order_graph).model_validate(graph)
+
+    assert migrated.schema_version == "2.0"
+    assert migrated.module == "MM"
+    assert migrated.process_scope == "P2P"
+    assert migrated.nodes[0].sap.gap.status == GapStatus.NONE
