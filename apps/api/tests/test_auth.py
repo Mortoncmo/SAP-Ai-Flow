@@ -46,6 +46,7 @@ def production_settings(**overrides: object) -> Settings:
         "oidc_algorithms": ["RS256"],
         "oidc_user_id_claim": "sub",
         "oidc_clock_skew_seconds": 0,
+        "export_execution_mode": "worker",
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -234,7 +235,22 @@ def test_readiness_requires_oidc_configuration_in_production():
         "authentication": "oidc",
         "database": "ready",
         "database_backend": "sqlite",
+        "export_execution": "worker",
     }
+
+
+def test_readiness_rejects_inline_export_execution_in_production():
+    app.dependency_overrides[get_settings] = lambda: production_settings(
+        export_execution_mode="inline"
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.get("/health/ready")
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+    assert response.status_code == 503
+    assert response.json()["export_execution"] == "inline"
 
 
 def test_oidc_algorithms_reject_symmetric_or_unsigned_tokens():

@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     llm_cache_max_entries: int = Field(default=128, ge=0, le=2048)
     export_retention_hours: int = Field(default=24, ge=1, le=720)
     export_stale_minutes: int = Field(default=5, ge=1, le=60)
+    export_execution_mode: Literal["inline", "worker"] = "inline"
+    export_worker_poll_seconds: float = Field(default=1.0, ge=0.1, le=60)
+    export_worker_batch_size: int = Field(default=8, ge=1, le=100)
     database_url: str = "sqlite:///../../output/sap_blueprint.db"
     database_auto_create: bool = True
     knowledge_root: str = ""

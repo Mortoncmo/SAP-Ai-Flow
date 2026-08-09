@@ -1,16 +1,12 @@
-import logging
-import re
-from datetime import UTC, datetime
 from functools import lru_cache
 from time import perf_counter
 from urllib.parse import quote
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Response
-from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session
 
 from app.agent.base import LLMProvider
-from app.agent.orchestrator import ProcessAgentOrchestrator, get_document_orchestrator
+from app.agent.orchestrator import ProcessAgentOrchestrator
 from app.agent.result_cache import ModelResultCache
 from app.api.routes.flowcharts import get_provider
 from app.core.config import Settings, get_settings
@@ -25,7 +21,12 @@ from app.db.models import (
     ProjectRecord,
 )
 from app.db.repository import BlueprintRepository
-from app.documents.blueprint import BlueprintDocumentModel, render_docx, render_markdown
+from app.documents.export_service import (
+    blueprint_document,
+    export_filenames,
+    process_export_job,
+    render_export,
+)
 from app.graph.patcher import apply_patch
 from app.graph.validator import graph_warnings
 from app.knowledge.service import KnowledgeService, get_knowledge_service
@@ -59,7 +60,6 @@ from app.models.projects import (
 from app.security.auth import ProjectRole, UserContext, get_user_context, require_role
 
 router = APIRouter(prefix="/api/v1", tags=["projects"])
-logger = logging.getLogger(__name__)
 
 
 def get_repository(session: Session = Depends(get_db_session)) -> BlueprintRepository:
@@ -534,9 +534,9 @@ def export_process(
     process = _authorize_process(repository, process_id, user, ProjectRole.VIEWER)
     project = repository.require_project(process.project_id, user_id=user.user_id)
     revision = repository.require_revision(process_id, request.revision_no)
-    model = _blueprint_document(project, process, revision)
-    content, media_type, extension = _render_export(model, request.format)
-    unicode_filename, fallback_filename = _export_filenames(
+    model = blueprint_document(project, process, revision)
+    content, media_type, extension = render_export(model, request.format)
+    unicode_filename, fallback_filename = export_filenames(
         process_name=process.name,
         process_id=process.id,
         revision_no=revision.revision_no,
@@ -576,13 +576,14 @@ def create_export_job(
         format=request.format,
         user_id=user.user_id,
     )
-    background_tasks.add_task(
-        _run_export_job,
-        job.id,
-        repository.session.get_bind(),
-        settings.export_retention_hours,
-        settings.export_stale_minutes,
-    )
+    if settings.export_execution_mode == "inline":
+        background_tasks.add_task(
+            process_export_job,
+            job.id,
+            repository.session.get_bind(),
+            retention_hours=settings.export_retention_hours,
+            stale_minutes=settings.export_stale_minutes,
+        )
     return _export_job_response(job)
 
 
@@ -600,13 +601,13 @@ def get_export_job(
 ) -> ExportJobResponse:
     _authorize_process(repository, process_id, user, ProjectRole.VIEWER)
     job = repository.require_export_job(process_id, export_id)
-    if job.status in {"pending", "running"}:
+    if settings.export_execution_mode == "inline" and job.status in {"pending", "running"}:
         background_tasks.add_task(
-            _run_export_job,
+            process_export_job,
             job.id,
             repository.session.get_bind(),
-            settings.export_retention_hours,
-            settings.export_stale_minutes,
+            retention_hours=settings.export_retention_hours,
+            stale_minutes=settings.export_stale_minutes,
         )
     return _export_job_response(job)
 
@@ -653,84 +654,6 @@ def download_export_job(
     )
 
 
-def _run_export_job(
-    export_id: str,
-    bind: Engine | Connection,
-    retention_hours: int,
-    stale_minutes: int,
-) -> None:
-    with Session(bind=bind, expire_on_commit=False) as session:
-        repository = BlueprintRepository(session)
-        try:
-            if not repository.claim_export_job(export_id, stale_minutes=stale_minutes):
-                return
-            job = repository.require_export_job_unscoped(export_id)
-            process = repository.require_process(job.process_id)
-            project = repository.require_project(process.project_id)
-            revision = repository.require_revision(process.id, job.revision_no)
-            model = _blueprint_document(project, process, revision)
-            content, media_type, extension = _render_export(model, job.format)
-            unicode_filename, fallback_filename = _export_filenames(
-                process_name=process.name,
-                process_id=process.id,
-                revision_no=revision.revision_no,
-                release_no=revision.release_no,
-                extension=extension,
-            )
-            repository.complete_export_job(
-                job=job,
-                filename=unicode_filename,
-                fallback_filename=fallback_filename,
-                media_type=media_type,
-                content=content,
-                retention_hours=retention_hours,
-            )
-        except Exception:
-            session.rollback()
-            logger.error("Blueprint export job failed", extra={"export_id": export_id})
-            try:
-                job = repository.require_export_job_unscoped(export_id)
-                repository.fail_export_job(job)
-            except Exception:
-                session.rollback()
-                logger.error(
-                    "Failed to persist blueprint export failure",
-                    extra={"export_id": export_id},
-                )
-
-
-def _blueprint_document(
-    project: ProjectRecord,
-    process: ProcessRecord,
-    revision: ProcessRevisionRecord,
-) -> BlueprintDocumentModel:
-    return BlueprintDocumentModel(
-        project_name=project.name,
-        customer_name=project.customer_name,
-        process_name=process.name,
-        process_id=process.id,
-        revision_no=revision.revision_no,
-        release_no=revision.release_no,
-        lifecycle_state=revision.lifecycle_state,
-        created_by=revision.created_by,
-        created_at=revision.created_at.isoformat(),
-        graph=GraphDocument.model_validate(revision.graph_json),
-    )
-
-
-def _render_export(
-    model: BlueprintDocumentModel,
-    format: str,
-) -> tuple[bytes, str, str]:
-    result = get_document_orchestrator().render(
-        model,
-        format,
-        markdown_renderer=render_markdown,
-        docx_renderer=render_docx,
-    )
-    return result.content, result.media_type, result.extension
-
-
 def _export_job_response(job: ExportJobRecord) -> ExportJobResponse:
     download_url = (
         f"/api/v1/processes/{job.process_id}/exports/jobs/{job.id}/download"
@@ -743,6 +666,7 @@ def _export_job_response(job: ExportJobRecord) -> ExportJobResponse:
         revision_no=job.revision_no,
         format=job.format,
         status=job.status,
+        attempt_count=job.attempt_count,
         filename=job.filename,
         content_length=job.content_length,
         error_code=job.error_code,
@@ -766,25 +690,6 @@ def _project_response(project: ProjectRecord, current_role: ProjectRole) -> Proj
         created_at=project.created_at,
         updated_at=project.updated_at,
     )
-
-
-def _export_filenames(
-    *,
-    process_name: str,
-    process_id: str,
-    revision_no: int,
-    release_no: int | None,
-    extension: str,
-) -> tuple[str, str]:
-    safe_name = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "-", process_name)
-    safe_name = re.sub(r"\s+", " ", safe_name).strip(" .") or "flowchart"
-    version = f"release-{release_no}" if release_no is not None else f"r{revision_no}"
-    exported_at = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    unicode_filename = f"SAP-Blueprint-{safe_name}-{version}-{exported_at}.{extension}"
-    fallback_filename = (
-        f"SAP-Blueprint-{process_id}-{version}-{exported_at}.{extension}"
-    )
-    return unicode_filename, fallback_filename
 
 
 def _project_audit_response(audit: ProjectAuditRecord) -> ProjectAuditResponse:

@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, inspect, text
 
 from alembic import command
 from app.core.config import get_settings
+from app.db.database import Database
 
 
 def test_initial_migration_upgrades_and_downgrades_empty_sqlite(tmp_path, monkeypatch):
@@ -30,9 +31,73 @@ def test_initial_migration_upgrades_and_downgrades_empty_sqlite(tmp_path, monkey
         }.issubset(
             set(inspect(engine).get_table_names())
         )
+        export_columns = {column["name"] for column in inspect(engine).get_columns("export_job")}
+        assert {"claim_token", "attempt_count"} <= export_columns
         command.downgrade(config, "base")
         assert inspect(engine).get_table_names() == ["alembic_version"]
         engine.dispose()
+    finally:
+        get_settings.cache_clear()
+
+
+def test_export_worker_lease_migration_backfills_and_rolls_back(tmp_path, monkeypatch):
+    database_url = f"sqlite:///{(tmp_path / 'export-worker-migration.db').as_posix()}"
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    get_settings.cache_clear()
+    config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
+
+    try:
+        command.upgrade(config, "20260809_0005")
+        engine = create_engine(database_url)
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO export_job (
+                        id, process_id, revision_no, format, status, created_by, created_at
+                    ) VALUES (
+                        'export-existing', 'process-existing', 0, 'markdown',
+                        'pending', 'owner-existing', :created_at
+                    )
+                    """
+                ),
+                {"created_at": datetime.now(UTC)},
+            )
+
+        command.upgrade(config, "head")
+        with engine.connect() as connection:
+            lease = connection.execute(
+                text(
+                    "SELECT claim_token, attempt_count FROM export_job "
+                    "WHERE id = 'export-existing'"
+                )
+            ).one()
+        assert lease == (None, 0)
+
+        command.downgrade(config, "20260809_0005")
+        columns = {column["name"] for column in inspect(engine).get_columns("export_job")}
+        assert "claim_token" not in columns
+        assert "attempt_count" not in columns
+        engine.dispose()
+    finally:
+        get_settings.cache_clear()
+
+
+def test_sqlite_development_startup_upgrades_existing_export_jobs(tmp_path, monkeypatch):
+    database_url = f"sqlite:///{(tmp_path / 'development-upgrade.db').as_posix()}"
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    get_settings.cache_clear()
+    config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
+
+    try:
+        command.upgrade(config, "20260809_0005")
+        database = Database(database_url, create_schema=True)
+        inspector = inspect(database.engine)
+        columns = {column["name"] for column in inspector.get_columns("export_job")}
+        indexes = {index["name"] for index in inspector.get_indexes("export_job")}
+        assert {"claim_token", "attempt_count"} <= columns
+        assert "ix_export_job_status_created_at" in indexes
+        database.engine.dispose()
     finally:
         get_settings.cache_clear()
 

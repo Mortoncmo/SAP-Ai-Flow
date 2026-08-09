@@ -34,6 +34,7 @@ services:
       LLM_CACHE_MAX_ENTRIES: ${LLM_CACHE_MAX_ENTRIES:-128}
       EXPORT_RETENTION_HOURS: ${EXPORT_RETENTION_HOURS:-24}
       EXPORT_STALE_MINUTES: ${EXPORT_STALE_MINUTES:-5}
+      EXPORT_EXECUTION_MODE: worker
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-sap_blueprint}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/${POSTGRES_DB:-sap_blueprint}
       DATABASE_AUTO_CREATE: "false"
       KNOWLEDGE_ROOT: /app/SAP_Knowledge
@@ -66,6 +67,30 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  worker:
+    image: sap-ai-flow-api:${SAP_FLOW_IMAGE_TAG:-local}
+    command: ["python", "-m", "app.workers.export_worker"]
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      EXPORT_RETENTION_HOURS: ${EXPORT_RETENTION_HOURS:-24}
+      EXPORT_STALE_MINUTES: ${EXPORT_STALE_MINUTES:-5}
+      EXPORT_EXECUTION_MODE: worker
+      EXPORT_WORKER_POLL_SECONDS: ${EXPORT_WORKER_POLL_SECONDS:-1}
+      EXPORT_WORKER_BATCH_SIZE: ${EXPORT_WORKER_BATCH_SIZE:-8}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-sap_blueprint}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/${POSTGRES_DB:-sap_blueprint}
+      DATABASE_AUTO_CREATE: "false"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.workers.export_worker", "--healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+    restart: unless-stopped
+
   web:
     image: sap-ai-flow-web:${SAP_FLOW_IMAGE_TAG:-local}
     build:
@@ -82,6 +107,8 @@ services:
         VITE_OIDC_AUDIENCE: ${VITE_OIDC_AUDIENCE:-}
     depends_on:
       api:
+        condition: service_healthy
+      worker:
         condition: service_healthy
     ports:
       - "8080:80"

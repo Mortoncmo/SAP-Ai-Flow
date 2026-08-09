@@ -681,9 +681,29 @@ class BlueprintRepository:
             )
         return job
 
-    def claim_export_job(self, export_id: str, *, stale_minutes: int) -> bool:
+    def list_export_job_candidates(self, *, stale_minutes: int, limit: int) -> list[str]:
+        stale_before = utc_now() - timedelta(minutes=stale_minutes)
+        return list(
+            self.session.scalars(
+                select(ExportJobRecord.id)
+                .where(
+                    or_(
+                        ExportJobRecord.status == "pending",
+                        and_(
+                            ExportJobRecord.status == "running",
+                            ExportJobRecord.started_at < stale_before,
+                        ),
+                    )
+                )
+                .order_by(ExportJobRecord.created_at, ExportJobRecord.id)
+                .limit(limit)
+            )
+        )
+
+    def claim_export_job(self, export_id: str, *, stale_minutes: int) -> str | None:
         now = utc_now()
         stale_before = now - timedelta(minutes=stale_minutes)
+        claim_token = new_id("export-claim")
         result = self.session.execute(
             update(ExportJobRecord)
             .where(
@@ -698,6 +718,8 @@ class BlueprintRepository:
             )
             .values(
                 status="running",
+                claim_token=claim_token,
+                attempt_count=ExportJobRecord.attempt_count + 1,
                 started_at=now,
                 completed_at=None,
                 expires_at=None,
@@ -706,7 +728,7 @@ class BlueprintRepository:
             )
         )
         self._commit()
-        return bool(result.rowcount)
+        return claim_token if result.rowcount else None
 
     def expire_export_jobs(self) -> None:
         self.session.execute(
@@ -722,34 +744,59 @@ class BlueprintRepository:
     def complete_export_job(
         self,
         *,
-        job: ExportJobRecord,
+        export_id: str,
+        claim_token: str,
         filename: str,
         fallback_filename: str,
         media_type: str,
         content: bytes,
         retention_hours: int,
-    ) -> None:
+    ) -> bool:
         completed_at = utc_now()
-        job.status = "completed"
-        job.filename = filename
-        job.fallback_filename = fallback_filename
-        job.media_type = media_type
-        job.content = content
-        job.content_length = len(content)
-        job.error_code = None
-        job.error_message = None
-        job.completed_at = completed_at
-        job.expires_at = completed_at + timedelta(hours=retention_hours)
+        result = self.session.execute(
+            update(ExportJobRecord)
+            .where(
+                ExportJobRecord.id == export_id,
+                ExportJobRecord.status == "running",
+                ExportJobRecord.claim_token == claim_token,
+            )
+            .values(
+                status="completed",
+                claim_token=None,
+                filename=filename,
+                fallback_filename=fallback_filename,
+                media_type=media_type,
+                content=content,
+                content_length=len(content),
+                error_code=None,
+                error_message=None,
+                completed_at=completed_at,
+                expires_at=completed_at + timedelta(hours=retention_hours),
+            )
+        )
         self._commit()
+        return bool(result.rowcount)
 
-    def fail_export_job(self, job: ExportJobRecord) -> None:
-        job.status = "failed"
-        job.content = None
-        job.content_length = None
-        job.error_code = "EXPORT_RENDER_FAILED"
-        job.error_message = "蓝图渲染失败，请稍后重试。"
-        job.completed_at = utc_now()
+    def fail_export_job(self, *, export_id: str, claim_token: str) -> bool:
+        result = self.session.execute(
+            update(ExportJobRecord)
+            .where(
+                ExportJobRecord.id == export_id,
+                ExportJobRecord.status == "running",
+                ExportJobRecord.claim_token == claim_token,
+            )
+            .values(
+                status="failed",
+                claim_token=None,
+                content=None,
+                content_length=None,
+                error_code="EXPORT_RENDER_FAILED",
+                error_message="蓝图渲染失败，请稍后重试。",
+                completed_at=utc_now(),
+            )
+        )
         self._commit()
+        return bool(result.rowcount)
 
     @staticmethod
     def _export_job_expired(job: ExportJobRecord) -> bool:

@@ -22,8 +22,11 @@ def ready(
 ) -> dict[str, str]:
     provider_configured = settings.agent_provider == "local" or bool(settings.deepseek_api_key)
     auth_configured = settings.app_env == "development" or settings.oidc_configured
+    export_configured = (
+        settings.app_env == "development" or settings.export_execution_mode == "worker"
+    )
     database_available = _database_available(database)
-    configured = provider_configured and auth_configured and database_available
+    configured = provider_configured and auth_configured and export_configured and database_available
     if not configured:
         response.status_code = 503
     return {
@@ -32,6 +35,7 @@ def ready(
         "authentication": "development" if settings.app_env == "development" else "oidc",
         "database": "ready" if database_available else "unavailable",
         "database_backend": make_url(settings.database_url).get_backend_name(),
+        "export_execution": settings.export_execution_mode,
     }
 
 
@@ -51,4 +55,5 @@ def metadata(settings: Settings = Depends(get_settings)) -> dict[str, str]:
         "version": "0.1.0",
         "provider": settings.agent_provider,
         "authentication": "development" if settings.app_env == "development" else "oidc",
+        "export_execution": settings.export_execution_mode,
     }

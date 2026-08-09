@@ -149,6 +149,10 @@ class ExportJobRecord(Base):
     revision_no: Mapped[int] = mapped_column(Integer, nullable=False)
     format: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    claim_token: Mapped[str | None] = mapped_column(String(80))
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     filename: Mapped[str | None] = mapped_column(String(255))
     fallback_filename: Mapped[str | None] = mapped_column(String(255))
     media_type: Mapped[str | None] = mapped_column(String(120))

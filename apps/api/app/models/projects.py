@@ -166,6 +166,7 @@ class ExportJobResponse(StrictModel):
     revision_no: int
     format: Literal["markdown", "docx"]
     status: Literal["pending", "running", "completed", "failed", "expired"]
+    attempt_count: int
     filename: str | None
     content_length: int | None
     error_code: str | None

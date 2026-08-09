@@ -9,11 +9,11 @@ Compose 不提供 PostgreSQL 默认密码。启动前必须在根目录 `.env` �
 ```powershell
 docker compose -f .\deploy\docker-compose.yml up -d postgres
 docker compose -f .\deploy\docker-compose.yml run --rm api alembic upgrade head
-docker compose -f .\deploy\docker-compose.yml up -d api web
+docker compose -f .\deploy\docker-compose.yml up -d api worker web
 Invoke-WebRequest http://localhost:8080/health/ready
 ```
 
-通过 Web 入口访问 `/health/ready`；它会检查认证/Provider 配置并实际执行数据库连接查询。只有返回 `200`、`status=ok` 且 `database=ready` 后才允许写入项目。API 的 8000 端口仅在 Compose 网络内暴露，不应绕过 Nginx 直接发布到宿主机或外部负载均衡器。
+通过 Web 入口访问 `/health/ready`；它会检查认证/Provider/导出执行模式并实际执行数据库连接查询。只有返回 `200`、`status=ok`、`database=ready` 且 `export_execution=worker` 后才允许写入项目。再运行 `docker compose -f .\deploy\docker-compose.yml ps`，确认 PostgreSQL、API、Worker 和 Web 都为健康状态。API 的 8000 端口仅在 Compose 网络内暴露，不应绕过 Nginx 直接发布到宿主机或外部负载均衡器。
 
 ## 外部模型调用缓存
 
@@ -61,12 +61,17 @@ Markdown/Word 导出通过持久化 `export_job` 记录状态和临时文件内�
 ```dotenv
 EXPORT_RETENTION_HOURS=24
 EXPORT_STALE_MINUTES=5
+EXPORT_EXECUTION_MODE=worker
+EXPORT_WORKER_POLL_SECONDS=1
+EXPORT_WORKER_BATCH_SIZE=8
 ```
 
 - Web 创建任务后轮询 `pending | running`，仅在 `completed` 时下载；`failed` 和 `expired` 必须重新创建任务。
-- 正常运行任务通过数据库条件更新保证只被一个执行者抢占。API 进程异常退出后，`pending` 任务会在下一次状态查询时再次调度；`running` 任务超过陈旧阈值后才允许重新抢占。
-- 到期任务在查询或创建新任务触发清理时转为 `expired` 并清空二进制内容。当前实现没有独立的定时清理 Worker，低流量实例必须监控表容量；在引入受控计划清理任务前，不得把该表作为长期存储。
-- 当前执行器是 API 进程内 `BackgroundTasks`，未替代独立队列/Worker；多实例抢占、进程滚动重启和长文档容量必须在目标 PostgreSQL 环境验证。
+- 生产 API 只创建和查询任务，不执行文档渲染；独立 Worker 轮询 `pending` 和超过陈旧阈值的 `running` 任务。非开发环境配置为 `inline` 时 readiness 返回 503。
+- Worker 领取任务时原子生成 `claim_token` 并递增 `attempt_count`。完成或失败写回必须匹配当前 Token；旧 Worker 被新实例接管后不能覆盖新结果。
+- Worker 每轮都会把到期任务转为 `expired` 并清空二进制内容。低流量实例也会按轮询周期清理，但仍必须监控 `export_job` 表容量、失败率、陈旧接管次数和平均渲染时长。
+- 可以启动多个 Worker，但真实多实例并发、进程滚动重启、五分钟以上长文档和批量上限必须在目标 PostgreSQL 环境验证后才能确定实例数、轮询周期和陈旧阈值。
+- Worker 结构化日志只允许记录 `export_id`、尝试次数、结果和异常类型，不得记录蓝图正文、Prompt、认证信息或客户业务数据。
 - 应用数据库只保存短期下载内容，不是永久文档库。正式蓝图下载后必须转存到有权限、保留期和备份策略的受控文档库。
 
 ## PostgreSQL 备份
@@ -107,14 +112,14 @@ Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $backupDir "chroma-$stamp
 
 ## 恢复流程
 
-恢复会覆盖数据库或索引，必须在变更窗口执行，并由项目负责人确认备份文件的 SHA256。恢复前先停止 API，保留当前卷快照，再恢复数据库和 Chroma，最后运行迁移和 readiness 检查。
+恢复会覆盖数据库或索引，必须在变更窗口执行，并由项目负责人确认备份文件的 SHA256。恢复前先停止 API 和 Worker，保留当前卷快照，再恢复数据库和 Chroma，最后运行迁移和 readiness 检查。
 
 ```powershell
 # 1. 明确确认后才执行
 $confirmRestore = Read-Host '输入 RESTORE 以继续恢复'
 if ($confirmRestore -cne 'RESTORE') { throw '已取消恢复' }
 
-docker compose -f .\deploy\docker-compose.yml stop api web
+docker compose -f .\deploy\docker-compose.yml stop web worker api
 
 # 2. 恢复 SQL（文件必须来自受控备份目录）
 Get-Content -LiteralPath .\output\backups\postgres-YYYYMMDD-HHmmss.sql -Raw -Encoding utf8 |
@@ -127,7 +132,7 @@ docker run --rm -v "${volume}:/target" -v "${backupDir}:/backup:ro" alpine `
 
 # 4. 迁移、启动和健康检查
 docker compose -f .\deploy\docker-compose.yml run --rm api alembic upgrade head
-docker compose -f .\deploy\docker-compose.yml up -d api web
+docker compose -f .\deploy\docker-compose.yml up -d api worker web
 Invoke-WebRequest http://localhost:8080/health/ready
 ```
 
@@ -139,21 +144,21 @@ Invoke-WebRequest http://localhost:8080/health/ready
 
 | 现象或错误码 | 首要检查 | 处理原则 |
 | --- | --- | --- |
-| `/health/ready` 返回 503 | `APP_ENV`、OIDC/JWKS、Provider 配置和数据库连接 | readiness 恢复前停止业务写入，不绕过生产认证门禁 |
+| `/health/ready` 返回 503 | `APP_ENV`、OIDC/JWKS、Provider、`EXPORT_EXECUTION_MODE=worker` 和数据库连接 | readiness 恢复前停止业务写入，不绕过生产认证或导出执行门禁 |
 | `DATABASE_WRITE_FAILED` | PostgreSQL 容器状态、连接数、磁盘、账号权限和 API 同请求号日志 | 确认事务已回滚；不要手工递增修订号，修复后重试原操作 |
 | `REVISION_CONFLICT` | 当前流程最新修订和客户端 `base_revision` | 先导出本地 JSON，再重新打开最新修订；不得静默覆盖 |
 | `KNOWLEDGE_UNAVAILABLE` | Chroma 卷、知识目录权限、索引版本和 API 日志 | 保留当前图；恢复索引后重试，不把无证据专业字段改为已验证 |
 | `PROVIDER_TIMEOUT` / `PROVIDER_UNAVAILABLE` | 外部模型策略、网络、限流、Provider 总时限 | 不应用迟到响应；确认当前修订未变化后重试或切回本地 Provider |
 | `RELEASE_PREFLIGHT_FAILED` | 响应中的缺失字段、上下文不一致、证据和 GAP 审计清单 | 补齐数据或顾问决策，不直接修改数据库绕过发布检查 |
-| `EXPORT_NOT_READY` | `export_id` 状态、API 进程和任务开始时间 | 保持轮询；超过陈旧阈值后再次查询以触发恢复，不直接修改任务状态 |
-| `EXPORT_RENDER_FAILED` | API 内存、流程图完整性、字体、`export_id` 和同请求号日志 | 当前图和修订保持可用；修复环境后创建新任务，不复用失败文件 |
+| `EXPORT_NOT_READY` | `export_id` 状态、Worker 健康、任务开始时间和 `attempt_count` | 保持轮询并检查 Worker 日志；超过陈旧阈值后由 Worker 自动接管，不直接修改任务状态 |
+| `EXPORT_RENDER_FAILED` | Worker 内存、流程图完整性、字体、`export_id` 和结构化任务日志 | 当前图和修订保持可用；修复环境后创建新任务，不复用失败文件 |
 | `EXPORT_EXPIRED` | `expires_at`、保留配置和数据库时间 | 对同一修订创建新任务；正式交付物应从受控文档库获取 |
 
 建议按顺序收集只读诊断信息：
 
 ```powershell
 docker compose -f .\deploy\docker-compose.yml ps
-docker compose -f .\deploy\docker-compose.yml logs --since 15m api postgres
+docker compose -f .\deploy\docker-compose.yml logs --since 15m api worker postgres
 docker compose -f .\deploy\docker-compose.yml exec -T postgres pg_isready
 docker compose -f .\deploy\docker-compose.yml run --rm api alembic current
 Invoke-WebRequest -UseBasicParsing http://localhost:8080/health/live
@@ -168,4 +173,4 @@ Invoke-WebRequest -UseBasicParsing http://localhost:8080/health/ready
 
 ## 当前验收边界
 
-本机没有 Docker CLI，因此 Compose build/up、真实 PostgreSQL、卷归档和恢复尚未完成实机验收。具备 Docker 的环境必须按本文档执行一次演练，并把命令输出、SHA256 和 readiness 结果归档到交付记录。
+本机没有 Docker CLI，因此 Compose build/up、真实 PostgreSQL、卷归档和恢复尚未完成本机实跑。GitHub `deploy` 作业必须验证 PostgreSQL/API/Worker/Web 全部运行、readiness 返回 `export_execution=worker`、Alembic 为 `20260809_0006 (head)`，并创建一条真实 PostgreSQL 导出任务确认 `attempt_count=1`、租约释放和内容持久化。目标环境仍需按本文档执行卷归档、恢复和多 Worker 演练，并归档命令输出、SHA256、readiness 与导出验收结果。

@@ -27,10 +27,13 @@ class Database:
 
     def _ensure_sqlite_development_columns(self) -> None:
         inspector = inspect(self.engine)
-        if "project" not in inspector.get_table_names():
-            return
-        columns = {column["name"] for column in inspector.get_columns("project")}
-        if "external_model_enabled" not in columns:
+        tables = set(inspector.get_table_names())
+        project_columns = (
+            {column["name"] for column in inspector.get_columns("project")}
+            if "project" in tables
+            else set()
+        )
+        if "project" in tables and "external_model_enabled" not in project_columns:
             with self.engine.begin() as connection:
                 connection.execute(
                     text(
@@ -38,6 +41,27 @@ class Database:
                         "BOOLEAN NOT NULL DEFAULT 0"
                     )
                 )
+        if "export_job" not in tables:
+            return
+        export_columns = {
+            column["name"] for column in inspect(self.engine).get_columns("export_job")
+        }
+        with self.engine.begin() as connection:
+            if "claim_token" not in export_columns:
+                connection.execute(text("ALTER TABLE export_job ADD COLUMN claim_token VARCHAR(80)"))
+            if "attempt_count" not in export_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE export_job ADD COLUMN attempt_count "
+                        "INTEGER NOT NULL DEFAULT 0"
+                    )
+                )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_export_job_status_created_at "
+                    "ON export_job (status, created_at)"
+                )
+            )
 
 
 def _enable_sqlite_foreign_keys(dbapi_connection: object, _: object) -> None:

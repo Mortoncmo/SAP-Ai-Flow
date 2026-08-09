@@ -17,9 +17,9 @@ from sqlalchemy.exc import OperationalError
 
 from app.agent.base import ProviderResult
 from app.agent.result_cache import ModelResultCache
-from app.api.routes import projects as projects_route
 from app.api.routes.flowcharts import get_provider
 from app.api.routes.projects import get_model_result_cache, get_repository
+from app.core.config import Settings, get_settings
 from app.core.errors import FlowchartError, ProviderError
 from app.db.database import Database
 from app.db.models import (
@@ -33,10 +33,12 @@ from app.db.models import (
     ProjectRecord,
 )
 from app.db.repository import BlueprintRepository
+from app.documents import export_service
 from app.knowledge.service import get_knowledge_service
 from app.main import app
 from app.models.graph import SapContext
 from app.models.patch import LLMPatch
+from app.workers.export_worker import ExportJobWorker
 
 
 class TrackingExternalProvider:
@@ -800,7 +802,7 @@ def test_dependency_or_export_failures_keep_current_graph_available(
     def fail_docx_render(_model):
         raise RuntimeError("private export rendering detail")
 
-    monkeypatch.setattr(projects_route, "render_docx", fail_docx_render)
+    monkeypatch.setattr(export_service, "render_docx", fail_docx_render)
     export_failure = client.post(
         f"/api/v1/processes/{process_id}/exports",
         json={"revision_no": 0, "format": "docx"},
@@ -1201,12 +1203,14 @@ def test_async_export_job_persists_status_download_and_expiration(persistence_cl
     )
     assert created.status_code == 202, created.text
     assert created.json()["status"] == "pending"
+    assert created.json()["attempt_count"] == 0
     export_id = created.json()["export_id"]
 
     status = client.get(f"/api/v1/processes/{process_id}/exports/jobs/{export_id}")
     assert status.status_code == 200, status.text
     payload = status.json()
     assert payload["status"] == "completed"
+    assert payload["attempt_count"] == 1
     assert payload["filename"].endswith(".md")
     assert payload["content_length"] > 100
     assert payload["download_url"].endswith(f"/{export_id}/download")
@@ -1246,7 +1250,7 @@ def test_async_export_failure_is_safe_and_query_is_process_scoped(
     def explode_docx(_model):
         raise RuntimeError("sensitive renderer details")
 
-    monkeypatch.setattr(projects_route, "render_docx", explode_docx)
+    monkeypatch.setattr(export_service, "render_docx", explode_docx)
     created = client.post(
         f"/api/v1/processes/{process_id}/exports/jobs",
         json={"revision_no": 0, "format": "docx"},
@@ -1306,4 +1310,92 @@ def test_stale_async_export_is_reclaimed_on_status_query(persistence_client):
     )
     assert completed.status_code == 200, completed.text
     assert completed.json()["status"] == "completed"
+    assert completed.json()["attempt_count"] == 1
     assert completed.json()["download_url"].endswith("/export-stale/download")
+
+
+def test_worker_mode_keeps_api_pending_until_worker_claims_job(persistence_client):
+    client, database = persistence_client
+    process_id = _create_process(client)
+    settings = Settings(
+        _env_file=None,
+        export_execution_mode="worker",
+        export_worker_batch_size=4,
+        database_url=database.url,
+        database_auto_create=False,
+    )
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        created = client.post(
+            f"/api/v1/processes/{process_id}/exports/jobs",
+            json={"revision_no": 0, "format": "markdown"},
+        )
+        assert created.status_code == 202, created.text
+        export_id = created.json()["export_id"]
+        assert created.json()["status"] == "pending"
+        assert created.json()["attempt_count"] == 0
+
+        polled = client.get(f"/api/v1/processes/{process_id}/exports/jobs/{export_id}")
+        assert polled.status_code == 200, polled.text
+        assert polled.json()["status"] == "pending"
+        assert polled.json()["attempt_count"] == 0
+
+        worker = ExportJobWorker(database, settings)
+        assert worker.run_once() == 1
+        assert worker.run_once() == 0
+
+        completed = client.get(f"/api/v1/processes/{process_id}/exports/jobs/{export_id}")
+        assert completed.status_code == 200, completed.text
+        assert completed.json()["status"] == "completed"
+        assert completed.json()["attempt_count"] == 1
+        assert completed.json()["download_url"].endswith(f"/{export_id}/download")
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
+def test_export_job_lease_fencing_rejects_stale_worker_writes(persistence_client):
+    client, database = persistence_client
+    process_id = _create_process(client)
+    with database.session_factory() as session:
+        repository = BlueprintRepository(session)
+        job = repository.create_export_job(
+            process_id=process_id,
+            revision_no=0,
+            format="markdown",
+            user_id="local-user",
+        )
+        first_claim = repository.claim_export_job(job.id, stale_minutes=5)
+        assert first_claim is not None
+
+        claimed_job = repository.require_export_job_unscoped(job.id)
+        claimed_job.started_at = datetime.now(UTC) - timedelta(minutes=10)
+        session.commit()
+        second_claim = repository.claim_export_job(job.id, stale_minutes=5)
+        assert second_claim is not None
+        assert second_claim != first_claim
+
+        assert not repository.complete_export_job(
+            export_id=job.id,
+            claim_token=first_claim,
+            filename="stale.md",
+            fallback_filename="stale.md",
+            media_type="text/markdown",
+            content=b"stale",
+            retention_hours=24,
+        )
+        assert not repository.fail_export_job(export_id=job.id, claim_token=first_claim)
+        assert repository.complete_export_job(
+            export_id=job.id,
+            claim_token=second_claim,
+            filename="winner.md",
+            fallback_filename="winner.md",
+            media_type="text/markdown",
+            content=b"winner",
+            retention_hours=24,
+        )
+        session.expire_all()
+        completed = repository.require_export_job_unscoped(job.id)
+        assert completed.status == "completed"
+        assert completed.attempt_count == 2
+        assert completed.claim_token is None
+        assert completed.content == b"winner"

@@ -254,6 +254,7 @@ export interface ExportJobResponse {
   revision_no: number
   format: 'markdown' | 'docx'
   status: ExportJobStatus
+  attempt_count: number
   filename: string | null
   content_length: number | null
   error_code: string | null

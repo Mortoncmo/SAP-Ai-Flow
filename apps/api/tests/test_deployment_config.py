@@ -23,6 +23,7 @@ def test_compose_requires_database_password_and_keeps_api_internal():
     compose = yaml.safe_load(raw)
     postgres = compose["services"]["postgres"]
     api = compose["services"]["api"]
+    worker = compose["services"]["worker"]
     web = compose["services"]["web"]
 
     assert "sap_blueprint_dev" not in raw
@@ -30,6 +31,7 @@ def test_compose_requires_database_password_and_keeps_api_internal():
     assert "${POSTGRES_PASSWORD:?" in api["environment"]["DATABASE_URL"]
     assert api["environment"]["EXPORT_RETENTION_HOURS"] == "${EXPORT_RETENTION_HOURS:-24}"
     assert api["environment"]["EXPORT_STALE_MINUTES"] == "${EXPORT_STALE_MINUTES:-5}"
+    assert api["environment"]["EXPORT_EXECUTION_MODE"] == "worker"
     assert api["environment"]["LLM_CACHE_TTL_SECONDS"] == "${LLM_CACHE_TTL_SECONDS:-60}"
     assert api["environment"]["LLM_CACHE_MAX_ENTRIES"] == "${LLM_CACHE_MAX_ENTRIES:-128}"
     assert api["image"] == "sap-ai-flow-api:${SAP_FLOW_IMAGE_TAG:-local}"
@@ -38,6 +40,15 @@ def test_compose_requires_database_password_and_keeps_api_internal():
     assert api["expose"] == ["8000"]
     assert web["healthcheck"]["test"][0] == "CMD-SHELL"
     assert "/health/ready" in web["healthcheck"]["test"][1]
+    assert worker["image"] == api["image"]
+    assert worker["command"] == ["python", "-m", "app.workers.export_worker"]
+    assert worker["environment"]["EXPORT_EXECUTION_MODE"] == "worker"
+    assert worker["environment"]["EXPORT_WORKER_POLL_SECONDS"] == "${EXPORT_WORKER_POLL_SECONDS:-1}"
+    assert worker["environment"]["EXPORT_WORKER_BATCH_SIZE"] == "${EXPORT_WORKER_BATCH_SIZE:-8}"
+    assert worker["environment"]["DATABASE_AUTO_CREATE"] == "false"
+    assert worker["depends_on"]["api"]["condition"] == "service_healthy"
+    assert worker["healthcheck"]["test"][-1] == "--healthcheck"
+    assert web["depends_on"]["worker"]["condition"] == "service_healthy"
 
 
 def test_settings_accept_compose_list_environment_values(monkeypatch):
@@ -77,9 +88,15 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "docker compose -f deploy/docker-compose.yml build" in workflow
     assert "http://127.0.0.1:8080/health/ready" in workflow
     assert "p['database_backend']=='postgresql'" in workflow
+    assert "p['export_execution']=='worker'" in workflow
+    assert "grep -c '^worker$'" in workflow
+    assert "python -m app.workers.export_worker_acceptance" in workflow
+    assert "output/export-worker-acceptance.json" in workflow
+    assert "p['attempt_count']==1" in workflow
     assert "pg_dump --clean --if-exists --no-owner" in workflow
     assert "sap_blueprint_restore" in workflow
-    assert "20260809_0005 (head)" in workflow
+    assert "20260809_0006 (head)" in workflow
+    assert 'test "$restored_head" = "20260809_0006"' in workflow
     assert workflow.count("aquasecurity/trivy-action@v0.36.0") == 4
     assert "output/sap-ai-flow-api.cdx.json" in workflow
     assert "output/sap-ai-flow-web.cdx.json" in workflow

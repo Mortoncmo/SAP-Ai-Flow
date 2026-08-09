@@ -1,6 +1,6 @@
 # SAP Blueprint AI Agent 实施规格
 
-> 文档状态：新版说明追踪与 DOCX 渲染验收基线 3.8
+> 文档状态：新版说明追踪与独立导出 Worker 实施基线 3.9
 >
 > 实施状态校准：2026-08-09（以当前代码与自动化测试为准）
 >
@@ -45,6 +45,7 @@
 | OpenAI / Claude 为默认模型 | 当前仓库已有 Local Rule 和 DeepSeek Provider | 继续使用 Provider 抽象；模型供应商不能进入 Patch、权限或持久化核心逻辑 |
 | RAG 自动匹配和 GAP 识别 | 原说明缺少授权、版本、证据和人工确认边界 | 生产只索引授权且审核通过的知识；专业结论必须带证据，AI 只能创建 GAP 候选 |
 | `UpdateFlowNodeInput` 只定义节点增改删 | 产品闭环同时要求 Process Agent 修改节点和连线，且当前项目已经把泳道作为一等图对象；仅保留节点 Tool 会导致“增加泳道”误增节点，也无法自然语言维护连线 | `update_flow` 统一输出节点、连线和泳道的原子 Patch；三类对象都必须覆盖自然语言与画布/Inspector 的增改删，并分别做意图匹配和验收 |
+| Word / Markdown 一键导出 | 原说明只定义导出结果，未定义长任务执行、多实例抢占、失败恢复和交付物保留边界 | 开发环境可用 API 进程内执行；生产 Compose 固定使用 PostgreSQL 持久任务和独立 Worker。任务领取使用租约 Token 栅栏，旧 Worker 失去租约后不得覆盖新 Worker 结果；数据库二进制默认只保留 24 小时，不替代正式对象存储或文档库 |
 | 顾问人效提升 30% 至 50% | 缺少真实项目前后测基线 | 保留为产品指标假设，不作为首轮技术验收的直接结论 |
 | 外部模型处理项目数据 | 原说明未定义项目授权、脱敏和审计 | 默认禁止项目调用外部模型；仅项目管理员可显式开启，调用前脱敏，策略变更必须审计 |
 | 优化模型调用次数和缓存 | 原说明未定义缓存键、项目隔离、失败处理、有效期和多实例一致性，直接缓存完整 API 响应会跳过修订与事务校验 | 只缓存项目已授权后的成功外部 Provider 结果；按项目/流程命名空间隔离，缓存命中后仍重新执行证据校验、原子 Patch 和数据库事务；V1.0 使用进程内 TTL/LRU 缓存和同请求合并，不宣称跨实例共享 |
@@ -64,7 +65,7 @@
 | 对画布节点执行增改删 | 扩展为节点、连线和泳道三类一等对象的独立增改删；图标和布局也有明确 Patch，不以“流程”节点代替泳道 | 已实现并自动化验收 | “新增三个泳道只新增泳道”等端到端用例持续通过 |
 | J45、T-Code、Fiori App 和 Best Practice RAG 匹配 | 使用版本化 Markdown、ChromaDB 持久化索引、向量/词法混合召回、上下文过滤、引用回链和证据门禁 | 技术链路已实现，生产语料未关闭 | 知识授权完成，SAP 顾问签字标注集和质量门槛通过 |
 | GAP 智能识别和前端预警 | AI 只能产生 `candidate`，顾问执行确认、驳回或解决，所有决策进入审计 | 仓库内已实现 | SAP 顾问扩充正式 GAP 标注集并完成业务验收 |
-| Word / Markdown 一键导出 | 两种格式共用 `BlueprintDocumentModel`，通过持久化异步任务生成、查询和下载；CI 使用 LibreOffice、Poppler 和 Noto CJK 渲染压力样例 | 仓库内内容、任务和跨渲染器视觉验收已关闭 | 目标部署使用不同字体或渲染器时重新执行同一门禁并纳入运维签字 |
+| Word / Markdown 一键导出 | 两种格式共用 `BlueprintDocumentModel`，通过持久化异步任务生成、查询和下载；生产 Compose 使用独立 Worker，CI 使用 LibreOffice、Poppler 和 Noto CJK 渲染压力样例 | 内容、任务、租约栅栏和跨渲染器视觉验收已在仓库内实现；独立 Worker 已通过本地双进程验收 | 在真实 PostgreSQL Compose 和目标部署复跑 Worker、迁移与渲染门禁；正式交付物转存受控文档库 |
 | Business、Knowledge、Process 和 Document Agent 分工 | 保留四类逻辑职责，由 LangGraph 做请求级路由；领域校验、永久 ID、权限和事务仍由现有服务层负责 | 已实现 | 编排故障、证据不足和导出预检回归持续通过 |
 | Project、Process、Node 和 ChangeLog 持久化 | 采用更完整的 `Project / Process / ProcessRevision / ChangeLog / GapDecision / ProjectMember / ExportJob` 模型，完整图快照是权威数据 | 已实现 | 目标 PostgreSQL 迁移、备份恢复和运维流程完成签字 |
 | React 18、Ant Design、OpenAI/Claude、WebSocket 等建议选型 | 保留当前已验证的 React 19、自定义设计体系、Provider 抽象和 REST；SSE 仅在未来长任务确有需要时引入 | 已决策 | 若未来变更选型，先给出收益、迁移范围和回归计划 |
@@ -155,7 +156,7 @@
 - 项目持久化修改的外部 Provider 结果缓存：默认 TTL 60 秒、最多 128 项、LRU 淘汰，缓存键覆盖项目/流程命名空间、Provider/模型、完整当前图、指令、语言和知识证据；支持相同并发请求合并，失败不缓存，本地规则 Provider 始终绕过缓存。
 - MM/P2P 五泳道示例，以及 SAP Inspector、证据和 GAP 候选交互。
 - 本地 `SAP_Knowledge` Markdown 语料、版本过滤、证据返回和 GAP 候选分析 API。
-- SQLAlchemy 项目、流程、修订、ChangeLog、GapDecision 和 ExportJob 持久化，以及 SQLite 开发适配器、Alembic 迁移和 PostgreSQL Compose 服务。
+- SQLAlchemy 项目、流程、修订、ChangeLog、GapDecision 和 ExportJob 持久化，以及 SQLite 开发适配器、Alembic 迁移和 PostgreSQL Compose 服务；`export_job` 已增加领取 Token、尝试次数和候选查询索引。
 - Repository 所有写入统一捕获数据库异常并显式回滚；一般写入故障返回不暴露底层细节的 `DATABASE_WRITE_FAILED`（503），修订唯一键冲突继续返回 `REVISION_CONFLICT`（409）。
 - `ProjectMember` 服务端成员模型、Alembic 迁移和成员管理 API；项目创建者自动成为 `project_admin`，项目角色从服务端成员记录解析。
 - 项目、流程、修订、发布、导出、GAP 和成员接口的角色门禁；非成员访问隐藏为 404，角色不足返回 403，最后一个项目管理员不能被降级或删除。
@@ -182,10 +183,11 @@
 - 前端普通 API 40 秒、异步导出创建/轮询/下载全流程 44 秒统一截止时间；用户取消保持 `AbortError`，客户端超时返回 `REQUEST_TIMEOUT`，修订冲突提示先导出 JSON，三类失败均保留当前图和原指令。
 - Markdown / Word 蓝图导出，共用 `BlueprintDocumentModel`，包含流程图、泳道、节点清单、SAP 元数据、证据和 GAP List。
 - Markdown / Word 浏览器下载支持中文流程标题、修订号和时间戳文件名；两种格式的节点、版本和 GAP 内容一致性已纳入自动化回归。
-- 持久化异步导出任务和 `export_id` 查询/下载：状态覆盖 `pending`、`running`、`completed`、`failed`、`expired`，支持数据库原子抢占、陈旧任务恢复、失败安全响应、到期内容清理和项目查看者权限校验；同步导出接口仅保留兼容用途。
+- 持久化异步导出任务和 `export_id` 查询/下载：状态覆盖 `pending`、`running`、`completed`、`failed`、`expired`，支持数据库原子抢占、租约 Token 栅栏、尝试次数、陈旧任务恢复、失败安全响应、到期内容清理和项目查看者权限校验；同步导出接口仅保留兼容用途。
+- 独立导出 Worker 轮询 PostgreSQL 候选任务并复用统一渲染服务；生产 API 只创建/查询任务，不在请求进程执行渲染，开发环境默认保留 `inline` 模式以便 SQLite 单进程启动。
 - Docker、Docker Compose、Nginx 和 GitHub Actions 基线；API 镜像已复制 `SAP_Knowledge` 和 Alembic 文件，并以非 root 用户运行。
-- Docker 构建上下文通过 `.dockerignore` 排除秘密、依赖、输出和原始说明书；Compose 强制提供 PostgreSQL 密码，API 8000 端口只在容器网络暴露，Web 以数据库感知的 readiness 做端到端健康检查，API/Web 镜像使用可由 `SAP_FLOW_IMAGE_TAG` 覆盖的稳定名称。
-- GitHub Actions 独立 `deploy` 验收作业已在干净 Ubuntu runner 构建 Compose 镜像、启动 PostgreSQL/API/Web、校验数据库 readiness 和 Alembic `20260809_0005 (head)`，再执行 `pg_dump`、恢复到独立数据库并核对迁移版本。
+- Docker 构建上下文通过 `.dockerignore` 排除秘密、依赖、输出和原始说明书；Compose 强制提供 PostgreSQL 密码，API 8000 端口只在容器网络暴露，生产 API/Worker 固定为 `worker` 执行模式，Web 同时等待 API 和 Worker 健康，API/Worker 复用同一稳定镜像。
+- GitHub Actions 独立 `deploy` 作业已扩展为启动 PostgreSQL/API/Worker/Web、校验 readiness 中的 `export_execution=worker`、Alembic `20260809_0006 (head)`、独立 Worker 实际完成 PostgreSQL 导出任务，再执行 `pg_dump`、恢复到独立数据库并核对迁移版本；该新增门禁须在本切片推送后取得远程运行证据。
 - 前后端自动化测试基线，以及迁移、导出结构和典型项目闭环的回归覆盖。
 - 可自行分配端口并启动当前 API、Web 和隔离 SQLite 数据库的 Playwright CLI smoke；覆盖本地撤销/重做/自动布局/刷新恢复、泳道不误增节点、成员 CRUD、外部模型二次确认与审计、取消/超时/修订冲突恢复、本地 Patch P95、持久化修改/发布/历史回看/新草稿、管理员/查看者权限、异步 Markdown/Word 下载和三种视口。
 - 可配置 API 容量测试脚本：每个样本使用独立流程，按并发级别输出错误率、P50/P95/P99、Provider/模型、`model_calls`、`cache_status` 和 `database_backend`；远程目标强制 Bearer Token，可要求真实外部 Provider 与 PostgreSQL，并在阈值失败后保留机器可读报告再返回非零。
@@ -198,7 +200,8 @@
 - 具体 SSO/OIDC 身份提供方的客户端注册、真实登录/退出联调和租户级隔离尚未完成；通用 SPA PKCE 与 Bearer Token 接入已完成，`X-User-ID` 仅保留在开发环境。
 - 容器基础镜像和操作系统包 Trivy 扫描、CycloneDX SBOM 和可修复 Critical 门禁已接入部署 CI；未修复发现仍保留在日志/构件中。集中日志采集/保留策略、告警规则和生产日志平台联调尚未完成；应用级请求/异常/审计脱敏与秘密扫描已具备自动化红线测试。
 - Python SDK、CLI 和 BPMN 导出。
-- 当前后台导出执行仍依赖 FastAPI 进程内 `BackgroundTasks`，导出二进制暂存应用数据库；尚未引入独立任务队列、Worker 和对象存储，因此不能把当前实现视为高并发、多实例或永久文档存储方案。
+- 独立 Worker 和数据库租约栅栏已实现，但导出二进制仍暂存应用数据库，尚未接入对象存储或正式文档库；当前方案只能作为默认 24 小时的临时交付，不得视为永久文档归档。
+- 独立 Worker 已在本地 SQLite 双进程场景完成单次领取和生成；真实 PostgreSQL Compose、多 Worker 并发、Worker 中断接管与容量上限仍需远程 CI 和目标环境验证。
 - 当前机器无 Docker CLI 和 LibreOffice，不能提供本机 Compose 或 DOCX PNG 渲染证据；镜像 build/up、PostgreSQL readiness、迁移、备份恢复及 LibreOffice/Noto CJK DOCX 渲染已由 GitHub Ubuntu runner 验收通过。目标部署若使用不同字体或渲染器，仍需重跑并纳入运维签字。
 - 生产备份、恢复、迁移和 readiness 操作已写入 `deploy/OPERATIONS.md`，真实卷归档与恢复演练仍需 Docker 环境。
 - 真实外部模型和 PostgreSQL 环境的并发、长尾性能、实际缓存命中率与容量压测尚未完成；当前只证明缓存功能、单事件循环内并发合并和本地 Patch 20 次采样 P95 小于 1 秒。缓存仍为 API 进程内实现，多个实例之间不共享结果。
@@ -210,6 +213,7 @@
 - 已可验收：节点、连线和泳道均覆盖自然语言与画布/Inspector 增改删；连线支持 `add_edge`、`update_edge` 和 `remove_edge`，标签更新保留永久 ID 和端点，`viewer` 只能查看连线属性。
 - 已可验收：旧图无损迁移到 2.0、P2P 五泳道示例、SAP Inspector 元数据维护、证据/待确认标识、本地知识检索、项目级知识/GAP 查询权限、GAP `candidate` 输出、GAP 人工决策审计、修订冲突、发布快照复制、Markdown / Word 异步导出。
 - 已可验收：导出任务状态和文件内容持久化，查看者可创建、查询和下载自己有权访问流程的导出；失败、过期、跨流程查询和未完成下载返回稳定错误，默认保留 24 小时，运行超过 5 分钟的陈旧任务可重新抢占执行。
+- 已可验收：开发 `inline` 与生产 `worker` 执行模式分离；Worker 领取时原子递增 `attempt_count` 并生成 `claim_token`，完成或失败写回必须匹配当前 Token，陈旧 Worker 被新实例接管后不能覆盖新结果。
 - 已可验收：知识库故障、Provider 故障和 DOCX 渲染故障均返回安全错误，当前图和持久化修订保持可用，失败请求不新增 ChangeLog。
 - 已可验收：前端主动取消、客户端超时和 `REVISION_CONFLICT` 均不改变图或服务端修订，原指令保留；超时后直接重试可正常进入发布生命周期。
 - 已完成典型闭环：创建项目 → 创建流程 → AI 生成流程 → 保存修订 → 发布版本 → 从发布版本创建新草稿 → 历史修订只读回看。
@@ -219,16 +223,17 @@
 - 当前离线混合检索要求最高候选分数至少达到 0.30，达到门槛后保留同一查询的相关支持证据；PP 生产订单和 SD 退货开票等近邻负例必须返回证据不足。GAP 规则除模块外还必须与流程范围和 SAP Release 一致，禁止跨范围或跨版本套用候选规则。
 - 当前 LangGraph 只编排请求级状态：纯泳道/连线/图标/布局修改不再依赖知识服务，SAP 专业修改保留检索、证据不足、外部模型策略、原子 Patch、证据校验和待确认分支；编排成功后才由现有 Repository 保存修订和 ChangeLog。文档导出增加待确认预检分支，渲染仍复用同一 `BlueprintDocumentModel`。
 - 当前外部 Provider 缓存只在项目明确开启外部模型后参与持久化修改；相同请求首次为 `miss`，TTL 内重复请求为 `hit`，同一事件循环的并发重复请求为 `shared`，本地规则或禁用缓存时为 `bypassed`。缓存命中仍重新执行证据验证、原子 Patch、修订冲突和数据库事务；数据库保存失败后的相同重试可复用 Provider 结果，但失败事务本身不会产生修订或 ChangeLog。
-- 当前部署配置已具备稳定镜像命名和可重复的 Compose/PostgreSQL 验收作业；远程 `deploy` 作业已验证干净构建、启动、readiness、迁移、备份和恢复。
+- 当前部署配置已具备稳定镜像命名、独立 Worker 健康检查和可重复的 Compose/PostgreSQL 验收入口；既有远程 `deploy` 已验证干净构建、API/Web 启动、readiness、0005 迁移、备份和恢复，新增 Worker 与 0006 PostgreSQL 验收仍等待本切片推送后的远程结果。
 
 ### 3.4 本轮验证记录（2026-08-09）
 
-- 后端 `ruff check .` 通过，pytest 99 项通过，包含 LangGraph 纯结构/SAP 专业意图路由、证据不足与待确认分支、文档导出预检，以及知识服务强制不可用时持久化泳道/连线/图标修改仍连续保存且不增节点；同时覆盖浏览器 smoke CORS 启动配置、数据库 readiness 安全失败和后端标识、容量脚本安全/指标契约、Docker 构建上下文与 Compose 暴露面静态红线、DOCX 渲染 CI 门禁、Compose 列表型环境变量加载和 PostgreSQL 部署工作流断言、13 个检索和 8 个 GAP 固定评估案例、跨流程/跨 Release GAP 规则隔离、版本化验收场景完整 API 闭环、异步导出持久化/下载/过期/失败/权限与迁移、`update_edge` 有效/非法/重复/原子回滚、自然语言连线增改删及重复/缺失/歧义错误，以及 DeepSeek 时限/重试、角色门禁、发布 GAP 审计、JWT、证据门禁、外部模型策略、日志脱敏、数据库事务回滚和依赖/导出失败保图。
+- 后端 `ruff check .` 通过，pytest 104 项通过，包含 LangGraph 纯结构/SAP 专业意图路由、证据不足与待确认分支、文档导出预检，以及知识服务强制不可用时持久化泳道/连线/图标修改仍连续保存且不增节点；同时覆盖开发/生产导出模式、Worker 单次执行、租约 Token 栅栏、0006 升级/回滚、浏览器 smoke CORS 启动配置、数据库 readiness 安全失败和后端标识、容量脚本安全/指标契约、Docker 构建上下文与 Compose 暴露面静态红线、DOCX 渲染 CI 门禁、Compose 列表型环境变量加载和 PostgreSQL 部署工作流断言、13 个检索和 8 个 GAP 固定评估案例、跨流程/跨 Release GAP 规则隔离、版本化验收场景完整 API 闭环、异步导出持久化/下载/过期/失败/权限与迁移、`update_edge` 有效/非法/重复/原子回滚、自然语言连线增改删及重复/缺失/歧义错误，以及 DeepSeek 时限/重试、角色门禁、发布 GAP 审计、JWT、证据门禁、外部模型策略、日志脱敏、数据库事务回滚和依赖/导出失败保图。
 - 依赖/导出失败回归通过：知识服务和 Provider 故障分别返回稳定错误；DOCX 渲染故障返回通用 500；三类失败后当前流程仍为修订 0，修订表与 ChangeLog 无新增记录。
 - SQLite 故障注入在 `ChangeLog` INSERT 阶段抛出 `OperationalError`，验证 API 返回安全的 `DATABASE_WRITE_FAILED`（503）并保留请求号；重新打开 Session 后流程修订号、修订表和 ChangeLog 均无部分更新。
 - 模型缓存专项回归覆盖 TTL、LRU、8 个相同并发请求只调用一次 Provider、失败不缓存、最后等待者取消后终止上游任务、跨项目/流程隔离和命中后重新执行证据校验；数据库故障注入还验证首次外部调用成功但事务回滚后，相同重试从缓存恢复，Provider 总调用次数仍为 1，最终只保存 1 个修订和 1 条 ChangeLog。
 - 前端 Vitest 30 项、TypeScript typecheck 和 production build 通过；覆盖异步导出创建、轮询、下载、统一截止时间、显式取消，以及成员 API、项目策略、导出文件名、导出失败错误、OIDC 配置、同源回调、防开放跳转、登录/退出回调和 Bearer Token 请求头。
 - Alembic SQLite 升级/回滚、`export_job` 迁移、旧项目成员安全回填、DOCX 结构审计、表格 geometry、横竖分节、表格行禁拆、图片和标题层级审计通过。
+- 独立 API/Worker 双进程 SQLite 验收通过：任务由 Worker 完成，`attempt_count=1`，租约已释放，Markdown 内容长度 1233；Worker 日志只记录任务标识、尝试次数和结果，不记录蓝图正文。
 - 仓库内 Playwright CLI smoke 默认自动分配端口并启动当前 API、Web 和隔离 SQLite 测试库，不依赖已运行的开发进程。它已完成自然语言连线新增、标签修改和删除，以及画布连线 Inspector 标签保存和删除；三类操作均验证节点、泳道不变，连线永久 ID 和端点在标签更新时保持不变，`viewer` 可查看但不能编辑、删除或使用键盘删除连线。
 - 同一 smoke 已完成持久化自然语言修改、发布只读、新草稿、历史回看、成员 CRUD、外部模型开关、异步 Markdown / Word 下载、取消/超时/409 恢复、泳道不误增节点、撤销/重做/布局/刷新恢复和 20 次本地 Patch P95 小于 1 秒；1440 x 900、1024 x 768 和 390 x 844 页面宽度正常，移动端成员弹窗无横向溢出，控制台与页面均为 0 error。
 - OIDC 本切片浏览器验收覆盖未配置兼容模式和“已配置但未登录”模式：登录入口可见，项目选择与新建项目被禁用，390 x 844 和 1024 x 768 页面/页头 `scrollWidth` 均等于视口宽度，登录图标宽度稳定为 35 px，控制台无 error。真实 IdP 跳转与回调仍待目标环境联调。
@@ -237,7 +242,7 @@
 - `scripts/run_capacity_test.ps1` 已在隔离 SQLite/Local Provider 环境完成 1/2/4 并发、每档 5 样本的脚本验收，三档错误率均为 0，P95 分别为 430/90/187 ms；1 ms P95/P99 门槛会正确保存 `passed=false` 报告并返回非零。数据创建确认、远程无 Token 拒绝、SQLite 被 `-RequirePostgreSQL` 拒绝且不进入测试数据创建的门禁均已实跑。该结果只证明工具可用，不是外部模型/PostgreSQL 容量结论。
 - `scripts/run_acceptance_demo.ps1` 已在独立 FastAPI 进程和隔离 SQLite 数据库中实跑通过，发布修订 2 / Release 1，创建两个持久化 `export_id`，并生成内容有效的 Markdown、DOCX 和 JSON 摘要；Windows PowerShell 5 的中文请求/响应已使用显式 UTF-8 字节和流解码验证。
 - 当前机器没有 LibreOffice/`soffice` 和 Docker CLI；对应验收由 GitHub Ubuntu runner 执行，不能把本机 `--generate-only` 结构检查误报为视觉通过。
-- 最新 GitHub Actions 运行 `31312821609` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过。`docx-render` 使用 LibreOffice Writer、Poppler 和 Noto CJK 生成 5 页 PDF/PNG，验证第 2 页为横向流程图、其余页面为纵向，检查中文文本、嵌入字体、页面非空和内容不触边；5 页 PNG 已逐页人工检查，无文字重叠、裁切、拆行表格、缺失字形或页眉页脚异常。`deploy` 作业继续通过镜像/SBOM/Trivy、干净 Compose、PostgreSQL readiness、Alembic head、`pg_dump` 和独立数据库恢复验证。
+- 最新已完成的 GitHub Actions 运行 `31313112763` 对提交 `13644c6` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过。`docx-render` 使用 LibreOffice Writer、Poppler 和 Noto CJK 生成 5 页 PDF/PNG，验证第 2 页为横向流程图、其余页面为纵向，检查中文文本、嵌入字体、页面非空和内容不触边；5 页 PNG 已逐页人工检查，无文字重叠、裁切、拆行表格、缺失字形或页眉页脚异常。该运行仍是 0005、无独立 Worker 的上一基线；本切片的 0006 与 Worker PostgreSQL 门禁必须以新运行结果关闭。
 
 ### 3.5 基线迁移原则
 
@@ -284,12 +289,16 @@ flowchart TB
     ORCH --> PROC["Process Agent"]
     ORCH --> KNOW["SAP Knowledge Service"]
     ORCH --> DOC["Document Service"]
+    API --> JOB["PostgreSQL ExportJob Queue / State"]
+    WORKER["Independent Export Worker"] --> JOB
+    WORKER --> DOC
     PROC --> PATCH["Pydantic Patch Validation"]
     PATCH --> APPLY["Atomic Patch Applier"]
     APPLY --> RULES["Graph and SAP Metadata Validation"]
     KNOW --> VECTOR["ChromaDB"]
     KNOW --> CORPUS["Versioned SAP Knowledge Corpus"]
     RULES --> DB["PostgreSQL Project / Process / Revision / ChangeLog"]
+    JOB --> DB
     DOC --> DB
     DOC --> EXPORT["Markdown / DOCX"]
     APPLY --> RESULT["Updated Graph + Summary + Evidence"]
@@ -309,6 +318,7 @@ flowchart TB
 7. 在同一数据库事务中保存新修订和 ChangeLog。
 8. 返回完整更新图、规范化 Patch、知识引用、警告和指标。
 9. 前端仅在 `base_revision` 匹配时应用响应，再执行增量布局。
+10. 生产文档导出由 API 提交 `pending` 任务，独立 Worker 轮询并以租约 Token 抢占；渲染完成或失败后写回状态，Web 继续按 `export_id` 轮询。
 
 ### 5.2 边界原则
 
@@ -317,6 +327,7 @@ flowchart TB
 - ChromaDB 只保存检索向量和知识元数据，不保存项目业务流程。
 - 模型缓存只保存短期外部 Provider 结构化结果，不是流程事实来源；缓存命中不能跳过 Patch、证据、权限、并发修订和事务校验。
 - PostgreSQL 是项目和版本事实来源；浏览器本地存储仅用于未登录演示或崩溃恢复。
+- PostgreSQL 同时承担 V1.0 导出任务队列和 24 小时临时交付物存储；独立 Worker 不拥有新的领域模型，只通过 Repository 和统一文档服务读取指定修订、执行渲染和写回状态。
 - 所有发布版本不可修改，后续变更必须产生新的编辑修订。
 
 ## 6. 领域数据模型
@@ -457,7 +468,7 @@ GAP 至少包含：
 | `ChangeLog` | 用户输入、规范化 Patch、决策摘要、证据和执行指标 |
 | `KnowledgeSource` | 知识文件来源、版本、授权和审核状态 |
 | `GapDecision` | GAP 候选的确认、驳回和解决记录 |
-| `ExportJob` | 指定修订的异步文档导出状态、文件元数据、临时内容和保留期限 |
+| `ExportJob` | 指定修订的异步文档导出状态、租约 Token、尝试次数、文件元数据、临时内容和保留期限 |
 
 ### 7.2 推荐关系模型
 
@@ -491,9 +502,9 @@ gap_decision
   comment, decided_by, decided_at
 
 export_job
-  id, process_id, revision_no, format, status, filename, media_type,
-  content BYTEA, content_length, error_code, error_message, created_by,
-  created_at, started_at, completed_at, expires_at
+  id, process_id, revision_no, format, status, claim_token, attempt_count,
+  filename, media_type, content BYTEA, content_length, error_code,
+  error_message, created_by, created_at, started_at, completed_at, expires_at
 ```
 
 约束：
@@ -508,6 +519,7 @@ export_job
 - `external_model_enabled` 默认 `false`；只允许项目管理员修改，修改与未修改结果均不得由客户端身份字段伪造操作者。
 - 项目审计记录不存储模型内部推理、认证头、密钥或未脱敏业务正文。
 - `export_job` 只保存指定修订生成的临时交付物；默认 24 小时后转为 `expired` 并清空二进制内容，不能作为正式文档归档库。
+- `export_job` 的完成或失败更新必须同时匹配 `id`、`running` 状态和当前 `claim_token`；每次成功领取原子递增 `attempt_count`，防止陈旧 Worker 覆盖接管后的结果。
 
 ### 7.3 两类版本
 
@@ -763,7 +775,9 @@ GET  /api/v1/processes/{process_id}/exports/jobs/{export_id}        # 查询持�
 GET  /api/v1/processes/{process_id}/exports/jobs/{export_id}/download
 ```
 
-Web 默认创建异步任务并每 250 毫秒轮询状态，任务完成后再下载文件；同步 `/exports` 仅用于向后兼容。任务状态为 `pending | running | completed | failed | expired`，只有 `completed` 可下载。默认 `EXPORT_RETENTION_HOURS=24`，超过保留期后返回 `EXPORT_EXPIRED`（410）并清空文件内容；默认 `EXPORT_STALE_MINUTES=5`，超过该时限仍处于运行态的任务允许通过数据库条件更新重新抢占，避免重复执行正常任务。
+Web 默认创建异步任务并每 250 毫秒轮询状态，任务完成后再下载文件；同步 `/exports` 仅用于向后兼容。任务状态为 `pending | running | completed | failed | expired`，响应包含从 0 开始的 `attempt_count`，只有 `completed` 可下载。默认 `EXPORT_RETENTION_HOURS=24`，超过保留期后返回 `EXPORT_EXPIRED`（410）并清空文件内容；默认 `EXPORT_STALE_MINUTES=5`，超过该时限仍处于运行态的任务允许通过数据库条件更新重新抢占，避免重复执行正常任务。
+
+开发环境默认 `EXPORT_EXECUTION_MODE=inline`，API 使用同一渲染服务完成任务，便于 SQLite 单进程运行；生产 Compose 固定为 `worker`，API 的创建和状态查询均不触发渲染。Worker 默认每 1 秒轮询、每批最多 8 个候选任务，可通过 `EXPORT_WORKER_POLL_SECONDS` 和 `EXPORT_WORKER_BATCH_SIZE` 调整。非开发环境配置为 `inline` 时 readiness 返回 503。
 
 三个异步接口均按流程所属项目执行至少 `viewer` 权限校验，并校验 `process_id` 与 `export_id` 的归属关系。渲染失败只持久化稳定错误码和通用文案，不保存或返回底层异常正文。
 
@@ -896,7 +910,8 @@ Markdown 和 Word 必须由同一个 `BlueprintDocumentModel` 生成，禁止两
 - 流程图使用独立横向 Letter 页面，正文恢复纵向 Letter；表格行禁止跨页拆分，页眉、页脚和页码在分节后保持一致。
 - 导出时未确认元数据和 GAP 必须保留“待确认/候选”标识。
 - Web 创建任务后通过 `export_id` 轮询，只有 `completed` 状态返回下载地址；`failed`、`expired` 和超时分别显示稳定错误并允许重新创建任务。
-- 后台任务必须先通过数据库条件更新抢占执行权；正常 `running` 任务不得重复渲染，超过陈旧阈值后才允许恢复。
+- 生产 API 只持久化和查询任务，由独立 Worker 轮询执行；生产 readiness 在配置为 `inline` 时必须返回 503。开发环境可以使用 `inline` 兼容模式，便于本地 SQLite 单进程运行。
+- Worker 必须先通过数据库条件更新抢占执行权并取得唯一 `claim_token`；正常 `running` 任务不得重复渲染，超过陈旧阈值后才允许恢复。完成和失败写回必须匹配当前 Token，失去租约的 Worker 只能丢弃结果。
 - 默认保留导出文件 24 小时，到期后清空二进制内容；应用数据库不是正式文档归档或对象存储。
 
 ### 12.3 验收要求
@@ -907,6 +922,7 @@ Markdown 和 Word 必须由同一个 `BlueprintDocumentModel` 生成，禁止两
 - 相同发布版本重复导出时业务内容一致。
 - CI 压力样例必须使用 LibreOffice、Poppler 和 Noto CJK 生成逐页 PNG，验证中文文本、嵌入字体、横竖页面、非空页面和内容边界，并人工检查所有页面。
 - 创建、轮询、下载、失败、过期、陈旧恢复和跨项目/跨流程权限路径均有自动化回归。
+- 独立 Worker 验收必须在真实 PostgreSQL 中创建任务，确认仅一次领取、`attempt_count=1`、完成后释放 `claim_token`、内容持久化，并清理验收数据；多 Worker 测试必须证明旧 Token 无法写回完成或失败状态。
 
 ## 13. 安全、权限与审计
 
@@ -985,6 +1001,8 @@ V1.0 至少定义以下角色：
 - 开启外部模型时，只有完成脱敏的图和指令可以进入 Provider 请求体。
 - ChangeLog、GAP 和项目审计中不得出现测试用客户、供应商、人员、邮箱、电话和金额原文。
 - Alembic 0004 在 SQLite 与 PostgreSQL 完成升级/回滚，旧项目升级后默认关闭外部模型。
+- Alembic 0006 增加导出领取 Token、尝试次数和候选索引；升级后旧任务 `attempt_count=0`，回滚移除新增列和索引。
+- Worker 模式下 API 轮询不得执行渲染；陈旧任务重新领取后，旧 Token 的成功或失败写回均不改变任务终态。
 
 ### 14.4 前端与端到端
 
@@ -1072,7 +1090,7 @@ V1.0 至少定义以下角色：
 - [x] 实现 Project、Process、ProcessRevision、ChangeLog 和 GapDecision。
 - [x] 实现事务保存和 `base_revision` 并发控制基础。
 - [x] 统一数据库写入失败回滚和安全 503 响应，并以 ChangeLog INSERT 故障注入验证无部分修订。
-- [x] 新增 `export_job` 持久化模型和 0005 Alembic 迁移，完成 SQLite 升级/回滚覆盖。
+- [x] 新增 `export_job` 持久化模型和 0005 Alembic 迁移；再以 0006 增加 `claim_token`、`attempt_count` 和候选查询索引，完成 SQLite 升级/回滚覆盖。
 - [x] 更新 Docker Compose，增加 PostgreSQL。
 - [x] 完成 Alembic SQLite 升级/回滚测试。
 - [x] 完成 PostgreSQL 迁移、备份和恢复自动化测试：GitHub Actions 在干净 Compose 栈核对数据库 readiness/Alembic head，并完成 `pg_dump` 与独立数据库恢复。
@@ -1123,11 +1141,12 @@ V1.0 至少定义以下角色：
 - [x] 基于 `python-docx` 实现 Word 模板。
 - [x] 加入页眉、页脚、版本、流程图和表格。
 - [x] 实现持久化异步导出任务、`export_id` 状态查询、失败/过期处理、陈旧任务恢复和下载接口。
+- [x] 实现独立导出 Worker、开发/生产执行模式分离、租约 Token 栅栏、尝试次数和本地双进程验收。
 - [x] 前端接入任务创建、250 毫秒轮询和完成后下载，并保持 44 秒统一截止时间和显式取消语义。
 - [x] 使用 LibreOffice、Poppler 和 Noto CJK 验证中文字体、横竖分页、长表格禁拆行和流程图清晰度，并上传 DOCX/PDF/逐页 PNG/字体/报告证据。
 - [x] 对比 Word 与 Markdown 共用内容模型的结构。
 
-退出标准：Word 与 Markdown 节点、GAP、引用和版本数据一致；异步任务的持久化、状态、权限、过期和下载回归已通过。结构审计、LibreOffice/Noto CJK 自动门禁和 5 页 PNG 全页视觉检查均已通过。目标部署改变字体或渲染器时必须重跑同一门禁，但不再把仓库内 DOCX 排版基线列为未完成项。
+退出标准：Word 与 Markdown 节点、GAP、引用和版本数据一致；异步任务的持久化、状态、权限、过期、租约栅栏和下载回归已通过。独立 Worker 本地双进程验收、结构审计、LibreOffice/Noto CJK 自动门禁和 5 页 PNG 全页视觉检查均已通过；新增 PostgreSQL Worker 门禁等待本切片远程 CI。目标部署改变字体或渲染器时必须重跑同一门禁，但不再把仓库内 DOCX 排版基线列为未完成项。
 
 ### Week 11：LangGraph、评估与性能
 
@@ -1146,6 +1165,7 @@ V1.0 至少定义以下角色：
 
 - [x] 完成本地历史/恢复、泳道、成员、外部模型策略、故障恢复、持久化发布生命周期、查看者权限、异步蓝图下载和三视口的仓库内 Playwright 验收。
 - [x] 完成 GitHub Actions 干净 Compose build/up、readiness、迁移和 PostgreSQL 备份恢复验收。
+- [ ] 完成新增独立 Worker 的 GitHub PostgreSQL 任务执行、0006 迁移和备份恢复验收；门禁代码已就绪，等待本切片推送后运行。
 - [ ] 完成目标环境部署、集中日志/告警和运行维护签字。
 - [x] 完成 `.dockerignore`、强制数据库密码、API 内网端口、Web 健康检查和数据库 readiness 的静态部署红线测试。
 - [x] 完成数据库迁移、备份恢复和故障排查文档；真实 PostgreSQL 演练仍由 Week 6 独立验收项跟踪。
@@ -1190,6 +1210,7 @@ V1.0 至少定义以下角色：
 - [x] 项目、流程、修订和发布版本可完整追溯。
 - [x] Markdown 与 Word 蓝图内容一致。
 - [x] Markdown 与 Word 可通过持久化 `export_id` 查询状态并在完成后下载，失败或过期时返回稳定错误。
+- [x] 独立 Worker 的领取、尝试次数和租约 Token 栅栏已通过本地双进程与自动化测试。
 
 ### 稳定性与安全
 
@@ -1198,16 +1219,17 @@ V1.0 至少定义以下角色：
 - [x] 模型、知识库和导出失败时当前图保持可用。
 - [x] 外部模型缓存按项目/流程隔离，失败不缓存，命中后仍执行证据、Patch、修订和事务校验。
 - [x] 项目权限、数据脱敏和外部模型策略生效。
-- [x] Docker Compose 可在干净 GitHub Ubuntu runner 启动全部 V1.0 服务，并完成 PostgreSQL 迁移、备份和恢复。
+- [x] Docker Compose 的 PostgreSQL/API/Web 基线已在干净 GitHub Ubuntu runner 完成迁移、备份和恢复。
+- [ ] Docker Compose 新增 Worker 服务需在 GitHub Ubuntu runner 完成真实 PostgreSQL 任务、0006 迁移和备份恢复验收。
 
 ## 18. 下一开发切片
 
-基础契约、流程编辑、持久化、版本工作流、服务端项目成员角色、项目级知识/GAP 查询、发布 GAP 审计、持久化异步文档导出和进程内外部 Provider 结果缓存已经落地。连线双入口增改删、导出任务创建/轮询/下载与缓存安全边界已完成代码、契约、权限和本地自动化验收；后续进入依赖外部环境、部署架构或业务签字的生产验收：
+基础契约、流程编辑、持久化、版本工作流、服务端项目成员角色、项目级知识/GAP 查询、发布 GAP 审计、持久化异步文档导出、独立导出 Worker 和进程内外部 Provider 结果缓存已经落地。连线双入口增改删、导出任务创建/轮询/下载、Worker 租约栅栏与缓存安全边界已完成代码、契约、权限和本地自动化验收；后续进入依赖外部环境、部署架构或业务签字的生产验收：
 
 1. 在目标 SSO/OIDC 身份提供方登记 SPA 客户端、回调地址和 API audience，完成真实登录、退出、Token 刷新/过期及部署联调；通用 Authorization Code + PKCE、Bearer Token 注入和应用日志治理已完成。
 2. 完成知识来源/授权顾问审核、正式标注集和生产语义嵌入模型对比；ChromaDB 持久化、离线混合召回和固定自动化评估集已完成。
-3. 使用已固化的容量脚本在真实外部模型/PostgreSQL 环境完成并发、长尾和容量测试并归档 JSON/CSV；同时验证多实例下导出任务抢占与陈旧恢复，并决定生产环境采用独立队列/Worker 和对象存储还是限制为单实例低并发部署。
-4. 在目标环境复跑已固化的 DOCX 渲染门禁，并完成部署联调和运行维护签字；若目标环境沿用 LibreOffice/Noto CJK，可直接对比 CI 基线，若更换字体或渲染器则必须重新逐页检查。应用数据库中的导出二进制不得被当作永久交付物存储。
+3. 先让新增 Compose 门禁在 GitHub PostgreSQL 中完成独立 Worker 任务、0006 迁移与备份恢复，再使用已固化的容量脚本在真实外部模型/PostgreSQL 环境完成并发、长尾和容量测试并归档 JSON/CSV；扩展多 Worker 中断接管测试，确认轮询批量、陈旧阈值和实例数上限。
+4. 在目标环境复跑已固化的 DOCX 渲染门禁，并完成部署联调和运行维护签字；若目标环境沿用 LibreOffice/Noto CJK，可直接对比 CI 基线，若更换字体或渲染器则必须重新逐页检查。为正式交付物接入受控对象存储或文档库，应用数据库中的导出二进制仍只保留 24 小时。
 5. 结合真实外部模型容量和命中率结果调整缓存 TTL/容量，并决定多实例环境是否引入分布式缓存；Python SDK、CLI 和 BPMN 保持后续优先级。
 
-当前本机可执行的最终流程编辑验收项、GitHub Actions Compose/PostgreSQL 自动化部署验收和 LibreOffice/Noto CJK DOCX 跨渲染器验收已完成。生产验收剩余门槛是具体身份提供方、知识授权与顾问签字、集中日志、真实外部模型容量、目标环境复跑和部署联调；这些项目未验证前不得宣称生产验收完成。
+当前本机可执行的最终流程编辑验收项、独立 Worker 双进程验收、既有 GitHub Actions Compose/PostgreSQL 自动化部署验收和 LibreOffice/Noto CJK DOCX 跨渲染器验收已完成。新增 Worker/0006 的远程 PostgreSQL 门禁尚未运行；生产验收剩余门槛还包括具体身份提供方、知识授权与顾问签字、集中日志、真实外部模型容量、对象存储或受控文档库、目标环境复跑和部署联调。这些项目未验证前不得宣称生产验收完成。
