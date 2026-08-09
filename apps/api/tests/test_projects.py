@@ -1,6 +1,8 @@
+import json
 import re
 from collections.abc import Iterator
 from io import BytesIO
+from pathlib import Path
 from urllib.parse import unquote
 
 import pytest
@@ -943,3 +945,82 @@ def test_gap_status_requires_decision_and_release_requires_decision_audit(persis
     assert unaudited_release.status_code == 422
     assert unaudited_release.json()["error"]["code"] == "RELEASE_PREFLIGHT_FAILED"
     assert unaudited_release.json()["error"]["details"]["gap_without_decision_audit"]
+
+
+def test_versioned_acceptance_demo_completes_release_and_exports(persistence_client):
+    client, _ = persistence_client
+    scenario_path = (
+        Path(__file__).resolve().parents[3]
+        / "examples"
+        / "mm-p2p-acceptance-demo.json"
+    )
+    scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
+
+    project_response = client.post("/api/v1/projects", json=scenario["project"])
+    assert project_response.status_code == 201, project_response.text
+    project_id = project_response.json()["id"]
+    process_response = client.post(
+        f"/api/v1/projects/{project_id}/processes",
+        json=scenario["process"],
+    )
+    assert process_response.status_code == 201, process_response.text
+    process_id = process_response.json()["id"]
+    revision = process_response.json()["current_revision"]
+    graph = process_response.json()["graph"]
+
+    for index, instruction in enumerate(scenario["instructions"], start=1):
+        modified = client.post(
+            f"/api/v1/processes/{process_id}/modify",
+            json={
+                "request_id": f"acceptance-demo-{index}",
+                "base_revision": revision,
+                "instruction": instruction,
+                "locale": "zh-CN",
+            },
+        )
+        assert modified.status_code == 200, modified.text
+        revision = modified.json()["result_revision"]
+        graph = modified.json()["graph"]
+
+    expected = scenario["expected"]
+    assert len(graph["nodes"]) == expected["node_count"]
+    assert len(graph["edges"]) == expected["edge_count"]
+    assert len(graph["lanes"]) == expected["lane_count"]
+    assert {node["label"] for node in graph["nodes"]} == set(expected["node_labels"])
+    assert {lane["label"] for lane in graph["lanes"]} == set(expected["lane_labels"])
+    approval_id = next(
+        node["id"]
+        for node in graph["nodes"]
+        if node["label"] == expected["approval_source_label"]
+    )
+    purchase_order_id = next(
+        node["id"]
+        for node in graph["nodes"]
+        if node["label"] == expected["approval_target_label"]
+    )
+    approval_edge = next(
+        edge
+        for edge in graph["edges"]
+        if edge["source"] == approval_id and edge["target"] == purchase_order_id
+    )
+    assert approval_edge["label"] == expected["approval_edge_label"]
+
+    release = client.post(
+        f"/api/v1/processes/{process_id}/releases",
+        json={"base_revision": revision},
+    )
+    assert release.status_code == 201, release.text
+    assert release.json()["lifecycle_state"] == "APPROVED"
+
+    markdown = client.post(
+        f"/api/v1/processes/{process_id}/exports",
+        json={"revision_no": revision, "format": "markdown"},
+    )
+    docx = client.post(
+        f"/api/v1/processes/{process_id}/exports",
+        json={"revision_no": revision, "format": "docx"},
+    )
+    assert markdown.status_code == 200, markdown.text
+    assert scenario["process"]["name"] in markdown.text
+    assert docx.status_code == 200, docx.text
+    assert docx.content[:2] == b"PK"

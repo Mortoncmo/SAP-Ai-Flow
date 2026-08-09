@@ -77,6 +77,33 @@ Invoke-WebRequest http://localhost:8080/health/ready
 
 恢复后必须抽查：项目成员角色、最新修订号、发布版本不可变性、ChangeLog/GAP 决策数量、知识检索来源版本和外部模型开关。若 readiness 未通过，禁止把 Web 入口交给业务用户。
 
+## 故障排查
+
+先记录失败时间、环境、`X-Request-ID`/响应 `request_id`、流程 ID 和修订号。日志可以记录这些定位字段，但不得粘贴认证头、Cookie、模型 API Key、请求正文或客户业务数据。
+
+| 现象或错误码 | 首要检查 | 处理原则 |
+| --- | --- | --- |
+| `/health/ready` 返回 503 | `APP_ENV`、OIDC/JWKS、Provider 配置和数据库连接 | readiness 恢复前停止业务写入，不绕过生产认证门禁 |
+| `DATABASE_WRITE_FAILED` | PostgreSQL 容器状态、连接数、磁盘、账号权限和 API 同请求号日志 | 确认事务已回滚；不要手工递增修订号，修复后重试原操作 |
+| `REVISION_CONFLICT` | 当前流程最新修订和客户端 `base_revision` | 先导出本地 JSON，再重新打开最新修订；不得静默覆盖 |
+| `KNOWLEDGE_UNAVAILABLE` | Chroma 卷、知识目录权限、索引版本和 API 日志 | 保留当前图；恢复索引后重试，不把无证据专业字段改为已验证 |
+| `PROVIDER_TIMEOUT` / `PROVIDER_UNAVAILABLE` | 外部模型策略、网络、限流、Provider 总时限 | 不应用迟到响应；确认当前修订未变化后重试或切回本地 Provider |
+| `RELEASE_PREFLIGHT_FAILED` | 响应中的缺失字段、上下文不一致、证据和 GAP 审计清单 | 补齐数据或顾问决策，不直接修改数据库绕过发布检查 |
+| Markdown/Word 导出失败 | API 内存、流程图完整性、字体和导出错误日志 | 当前图和修订保持可用；修复环境后对同一修订重复导出 |
+
+建议按顺序收集只读诊断信息：
+
+```powershell
+docker compose -f .\deploy\docker-compose.yml ps
+docker compose -f .\deploy\docker-compose.yml logs --since 15m api postgres
+docker compose -f .\deploy\docker-compose.yml exec -T postgres pg_isready
+docker compose -f .\deploy\docker-compose.yml run --rm api alembic current
+Invoke-WebRequest -UseBasicParsing http://localhost:8080/health/live
+Invoke-WebRequest -UseBasicParsing http://localhost:8080/health/ready
+```
+
+恢复服务后通过受控 Secret 注入设置 `SAP_FLOW_ACCESS_TOKEN`，再执行 `scripts/run_acceptance_demo.ps1 -BaseUrl http://localhost:8080`，确认项目创建、两轮修改、发布和 Markdown/Word 下载全部成功。Token 不得出现在命令历史归档、日志或验收摘要中；生产故障期间生成的日志、数据库备份和验收摘要必须进入受控交付记录，不提交到 GitHub。
+
 ## SQLite 开发数据
 
 开发环境没有 Docker 时，先停止 API，再复制 `output/sap_blueprint.db` 到受控备份目录。恢复时保留当前文件副本后覆盖，并运行 `apps/api` 下的 Alembic 升级/回滚测试；SQLite 备份不替代生产 PostgreSQL 备份。

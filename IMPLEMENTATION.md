@@ -158,6 +158,7 @@
 - Docker、Docker Compose、Nginx 和 GitHub Actions 基线；API 镜像已复制 `SAP_Knowledge` 和 Alembic 文件，并以非 root 用户运行。
 - 前后端自动化测试基线，以及迁移、导出结构和典型项目闭环的回归覆盖。
 - 可自行分配端口并启动当前 API、Web 和隔离 SQLite 数据库的 Playwright CLI smoke；覆盖本地撤销/重做/自动布局/刷新恢复、泳道不误增节点、成员 CRUD、外部模型二次确认与审计、取消/超时/修订冲突恢复、本地 Patch P95、持久化修改/发布/历史回看/新草稿、管理员/查看者权限、Markdown/Word 下载和三种视口。
+- 版本化 MM/P2P 验收场景和 PowerShell API 演示脚本；可重复完成项目创建、Agent 建图、连线修改、发布和双格式蓝图下载，并输出验收摘要。
 
 ### 3.2 尚未完成
 
@@ -187,7 +188,7 @@
 
 ### 3.4 本轮验证记录（2026-08-09）
 
-- 后端 `ruff check app tests alembic` 通过，pytest 75 项通过，包含 `update_edge` 有效/非法/重复/原子回滚、自然语言连线增改删及重复/缺失/歧义错误，以及 DeepSeek 超时/总时限、429/5xx 重试、认证不重试、非法输出分类、成员迁移、角色门禁、项目知识路由、发布 GAP 审计、JWT、知识评估、证据门禁、连续 10 轮 ID 保留、外部模型策略、日志脱敏、数据库事务回滚和依赖/导出失败保图。
+- 后端 `ruff check app tests alembic` 通过，pytest 76 项通过，包含版本化验收场景完整 API 闭环、`update_edge` 有效/非法/重复/原子回滚、自然语言连线增改删及重复/缺失/歧义错误，以及 DeepSeek 时限/重试、角色门禁、发布 GAP 审计、JWT、知识评估、证据门禁、外部模型策略、日志脱敏、数据库事务回滚和依赖/导出失败保图。
 - 依赖/导出失败回归通过：知识服务和 Provider 故障分别返回稳定错误；DOCX 渲染故障返回通用 500；三类失败后当前流程仍为修订 0，修订表与 ChangeLog 无新增记录。
 - SQLite 故障注入在 `ChangeLog` INSERT 阶段抛出 `OperationalError`，验证 API 返回安全的 `DATABASE_WRITE_FAILED`（503）并保留请求号；重新打开 Session 后流程修订号、修订表和 ChangeLog 均无部分更新。
 - 前端 Vitest 29 项、TypeScript typecheck 和 production build 通过；覆盖统一客户端超时、显式取消，以及成员 API、项目策略、导出文件名、导出失败错误、OIDC 配置、同源回调、防开放跳转、登录/退出回调和 Bearer Token 请求头。
@@ -197,6 +198,7 @@
 - OIDC 本切片浏览器验收覆盖未配置兼容模式和“已配置但未登录”模式：登录入口可见，项目选择与新建项目被禁用，390 x 844 和 1024 x 768 页面/页头 `scrollWidth` 均等于视口宽度，登录图标宽度稳定为 35 px，控制台无 error。真实 IdP 跳转与回调仍待目标环境联调。
 - `pip-audit` 在升级 Pillow 12.3.0 后无可修复漏洞；ChromaDB `PYSEC-2026-311` 因项目未暴露 Chroma HTTP API 而按 `SECURITY.md` 限定例外并设 2026-09-09 复核日。`npm audit --omit=dev` 为 0 漏洞，生产源码/前端构建秘密扫描通过。
 - `scripts/browser_smoke.ps1` 与 `scripts/browser_smoke.js` 已固化本地历史/恢复、泳道、连线双入口增改删、成员 CRUD、外部模型策略、取消/超时/冲突恢复、本地 P95、持久化发布生命周期、管理员/查看者权限、实际下载和三视口回归；还需在真实外部模型/PostgreSQL 环境扩展并发、长尾与容量测试。
+- `scripts/run_acceptance_demo.ps1` 已在独立 FastAPI 进程和隔离 SQLite 数据库中实跑通过，发布修订 2 / Release 1，并生成内容有效的 Markdown、DOCX 和 JSON 摘要；Windows PowerShell 5 的中文请求/响应已使用显式 UTF-8 字节和流解码验证。
 - 当前环境没有 LibreOffice/`soffice`，DOCX 尚未完成 PNG 级视觉渲染；当前环境没有 Docker CLI，Compose 尚未完成真实 build/up 验收。
 
 ### 3.5 基线迁移原则
@@ -1068,11 +1070,11 @@ V1.0 至少定义以下角色：
 
 - [x] 完成本地历史/恢复、泳道、成员、外部模型策略、故障恢复、持久化发布生命周期、查看者权限、蓝图下载和三视口的仓库内 Playwright 验收。
 - [ ] 完成 Docker 和部署验收。
-- [ ] 完成数据库迁移、备份恢复和故障排查文档。
+- [x] 完成数据库迁移、备份恢复和故障排查文档；真实 PostgreSQL 演练仍由 Week 6 独立验收项跟踪。
 - [x] 完成应用依赖、生产源码、前端构建和外部模型数据流安全检查；ChromaDB 无修复版公告按限定攻击面登记复核。
 - [ ] 完成容器基础镜像/操作系统包扫描、SBOM 和生产日志平台联调。
 - [ ] 完成 MM/P2P 顾问验收和问题收敛。
-- [ ] 更新 README、API 示例和最终演示数据。
+- [x] 更新 README、版本化 API 验收场景、最终演示脚本和输出校验。
 
 退出标准：所有 P0 用例通过，无阻断级缺陷，可在干净环境按文档启动并完成完整业务闭环。
 

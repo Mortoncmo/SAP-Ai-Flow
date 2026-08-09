@@ -102,6 +102,23 @@ DeepSeek 单次请求默认 10 秒，最多重试 2 次，但整个 Provider 调
 - `增加三个泳道：销售、物流、财务`
 - `把信用检查移动到财务泳道`
 - `给信用检查增加盾牌图标`
+- `连接开始到结束`
+- `把开始到结束的连线标签改为快速通道`
+- `删除开始到结束的连线`
+
+## API 验收演示
+
+启动 API 后，可用版本化场景清单跑通“创建项目 → Agent 生成 P2P → 修改连线 → 发布 → 下载蓝图”的完整 API 闭环：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\run_acceptance_demo.ps1 `
+  -BaseUrl http://127.0.0.1:8000
+```
+
+脚本读取 `examples/mm-p2p-acceptance-demo.json`，显式按 UTF-8 发送和读取中文 JSON，并校验 7 个节点、6 条连线、5 条泳道、连线标签和发布状态。Markdown、DOCX 与 `acceptance-summary.json` 默认写入 `output/acceptance-demo`。该目录已忽略，不会把运行数据提交到仓库。
+
+本地开发默认使用 `-UserId local-user`。对启用 OIDC 的部署环境执行时，通过受控 Secret 注入设置 `SAP_FLOW_ACCESS_TOKEN`，或显式传入 `-AccessToken`；令牌只进入 `Authorization` 请求头，不写入验收摘要。不要把令牌明文写入命令历史。
 
 ## 身份认证
 
