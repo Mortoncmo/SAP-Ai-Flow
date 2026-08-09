@@ -173,4 +173,4 @@ Invoke-WebRequest -UseBasicParsing http://localhost:8080/health/ready
 
 ## 当前验收边界
 
-本机没有 Docker CLI，因此 Compose build/up、真实 PostgreSQL、卷归档和恢复尚未完成本机实跑。GitHub `deploy` 作业必须验证 PostgreSQL/API/Worker/Web 全部运行、readiness 返回 `export_execution=worker`、Alembic 为 `20260809_0006 (head)`，并创建一条真实 PostgreSQL 导出任务确认 `attempt_count=1`、租约释放和内容持久化。目标环境仍需按本文档执行卷归档、恢复和多 Worker 演练，并归档命令输出、SHA256、readiness 与导出验收结果。
+本机没有 Docker CLI，因此 Compose build/up、真实 PostgreSQL、卷归档和恢复尚未完成本机实跑。GitHub Actions 运行 `31315316964` 已验证 PostgreSQL/API/Worker/Web 全部运行、readiness 返回 `export_execution=worker`、Alembic 为 `20260809_0006 (head)`，并通过真实 PostgreSQL 导出任务确认 `attempt_count=1`、租约释放和内容持久化；备份恢复后迁移头仍为 0006。目标环境仍需按本文档执行卷归档、恢复和多 Worker 演练，并归档命令输出、SHA256、readiness 与导出验收结果。
