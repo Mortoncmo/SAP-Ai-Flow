@@ -15,8 +15,8 @@ jobs:
       run:
         working-directory: apps/api
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -30,8 +30,8 @@ jobs:
   web:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -60,7 +60,7 @@ jobs:
       VITE_OIDC_AUDIENCE: sap-ai-flow-ci
       CORS_ORIGINS: http://localhost:8080
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Prepare acceptance output
         run: mkdir -p output
       - name: Build Compose images
@@ -78,7 +78,7 @@ jobs:
           format: cyclonedx
           output: output/sap-ai-flow-web.cdx.json
       - name: Upload image SBOMs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: container-sboms
           path: output/*.cdx.json
