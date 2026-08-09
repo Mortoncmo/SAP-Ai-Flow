@@ -68,7 +68,7 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "pg_dump --clean --if-exists --no-owner" in workflow
     assert "sap_blueprint_restore" in workflow
     assert "20260809_0005 (head)" in workflow
-    assert workflow.count("aquasecurity/trivy-action@0.33.1") == 4
+    assert workflow.count("aquasecurity/trivy-action@v0.36.0") == 4
     assert "output/sap-ai-flow-api.cdx.json" in workflow
     assert "output/sap-ai-flow-web.cdx.json" in workflow
     assert "actions/upload-artifact@v4" in workflow

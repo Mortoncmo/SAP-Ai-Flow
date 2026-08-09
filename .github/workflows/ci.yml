@@ -66,13 +66,13 @@ jobs:
       - name: Build Compose images
         run: docker compose -f deploy/docker-compose.yml build
       - name: Generate API image SBOM
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: sap-ai-flow-api:${{ env.SAP_FLOW_IMAGE_TAG }}
           format: cyclonedx
           output: output/sap-ai-flow-api.cdx.json
       - name: Generate Web image SBOM
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: sap-ai-flow-web:${{ env.SAP_FLOW_IMAGE_TAG }}
           format: cyclonedx
@@ -85,7 +85,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Scan API image for critical vulnerabilities
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: sap-ai-flow-api:${{ env.SAP_FLOW_IMAGE_TAG }}
           scanners: vuln
@@ -94,7 +94,7 @@ jobs:
           ignore-unfixed: false
           exit-code: "1"
       - name: Scan Web image for critical vulnerabilities
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: sap-ai-flow-web:${{ env.SAP_FLOW_IMAGE_TAG }}
           scanners: vuln
