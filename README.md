@@ -171,11 +171,14 @@ npm.cmd test
 npm.cmd run typecheck
 npm.cmd run build
 
-# 浏览器 smoke；需先启动 API 和 Web
+# 浏览器 smoke；默认自动启动隔离的 API、Web 和 SQLite 测试库
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\browser_smoke.ps1
+
+# 也可验收一个已经运行的环境
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\browser_smoke.ps1 -BaseUrl http://127.0.0.1:5173
 ```
 
-自动化测试默认使用本地 Provider，不会产生模型调用费用。浏览器 smoke 使用独立 Playwright CLI 会话，验证按钮和自然语言泳道操作不会增加流程节点、390 x 844 无横向溢出且控制台无错误；临时浏览器产物位于已忽略的 `.playwright-cli` 目录。
+自动化测试默认使用本地 Provider，不会产生模型调用费用。浏览器 smoke 使用独立 Playwright CLI 会话；未提供 `-BaseUrl` 时会自动分配端口，启动当前工作区代码和 `output/browser-smoke` 下的隔离 SQLite 数据库，完成后关闭进程。它验证按钮/自然语言泳道操作不增加流程节点、项目成员增改删、外部模型二次确认及审计、持久化修改/发布/历史回看/新草稿、管理员与 `viewer` 权限、Markdown/Word 实际下载、1440 x 900、1024 x 768、390 x 844 无横向溢出，以及控制台和页面无错误。临时运行产物位于已忽略的 `output/browser-smoke` 和 `.playwright-cli` 目录。
 
 ## Docker Compose
 
