@@ -1,5 +1,7 @@
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import SQLAlchemyError
 
+from app.db.database import get_database
 from app.main import app
 
 client = TestClient(app)
@@ -10,6 +12,30 @@ def test_health_endpoint():
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_readiness_returns_safe_503_when_database_is_unavailable():
+    class UnavailableEngine:
+        def connect(self):
+            raise SQLAlchemyError("postgresql://user:secret-password@private-host/database")
+
+    class UnavailableDatabase:
+        engine = UnavailableEngine()
+
+    app.dependency_overrides[get_database] = lambda: UnavailableDatabase()
+    try:
+        response = client.get("/health/ready")
+    finally:
+        app.dependency_overrides.pop(get_database, None)
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "not_ready",
+        "provider": "local",
+        "authentication": "development",
+        "database": "unavailable",
+    }
+    assert "secret-password" not in response.text
 
 
 def test_local_provider_modifies_graph(order_graph):

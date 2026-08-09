@@ -1,6 +1,6 @@
 # SAP Blueprint AI Agent 实施规格
 
-> 文档状态：整合实施与验收基线 3.1
+> 文档状态：整合实施与验收基线 3.2
 >
 > 实施状态校准：2026-08-09（以当前代码与自动化测试为准）
 >
@@ -141,7 +141,7 @@
 - 校验错误移除原始 `input`/`ctx`，认证 Token/API Key/JWT 与业务敏感字段统一脱敏；CI 执行 Python/Node 依赖审计和生产源码/前端构建秘密扫描。
 - 项目级外部模型默认关闭策略、管理员开关、0004 迁移、策略审计 API、禁用时本地回退以及模型请求体/ChangeLog/GAP 脱敏。
 - 管理员成员弹窗中的“仅本地 / 允许调用”开关、数据外发二次确认、状态回写和 390 x 844 移动端适配。
-- 无项目上下文的流程修改、全局知识检索和全局 GAP 分析接口在非开发环境隐藏为 404；OIDC 或 Provider 未配置时 readiness 返回 503。
+- 无项目上下文的流程修改、全局知识检索和全局 GAP 分析接口在非开发环境隐藏为 404；OIDC/Provider 未配置或数据库不可连接时 readiness 返回 503。
 - 项目级知识检索和 GAP 分析接口；全局知识接口仅保留给本地开发演示。
 - 版本化 Markdown chunk、内容哈希、ChromaDB 持久化集合和离线字符 n-gram 向量/词法混合召回；索引重建会清理陈旧 chunk。
 - 固定知识自动化评估集，覆盖 13 个检索案例和 8 个 GAP 正反例，并设置检索状态、Top-1 来源、证据来源、GAP 规则引用和结果质量门槛。
@@ -157,6 +157,7 @@
 - Markdown / Word 浏览器下载支持中文流程标题、修订号和时间戳文件名；两种格式的节点、版本和 GAP 内容一致性已纳入自动化回归。
 - 持久化异步导出任务和 `export_id` 查询/下载：状态覆盖 `pending`、`running`、`completed`、`failed`、`expired`，支持数据库原子抢占、陈旧任务恢复、失败安全响应、到期内容清理和项目查看者权限校验；同步导出接口仅保留兼容用途。
 - Docker、Docker Compose、Nginx 和 GitHub Actions 基线；API 镜像已复制 `SAP_Knowledge` 和 Alembic 文件，并以非 root 用户运行。
+- Docker 构建上下文通过 `.dockerignore` 排除秘密、依赖、输出和原始说明书；Compose 强制提供 PostgreSQL 密码，API 8000 端口只在容器网络暴露，Web 以数据库感知的 readiness 做端到端健康检查。
 - 前后端自动化测试基线，以及迁移、导出结构和典型项目闭环的回归覆盖。
 - 可自行分配端口并启动当前 API、Web 和隔离 SQLite 数据库的 Playwright CLI smoke；覆盖本地撤销/重做/自动布局/刷新恢复、泳道不误增节点、成员 CRUD、外部模型二次确认与审计、取消/超时/修订冲突恢复、本地 Patch P95、持久化修改/发布/历史回看/新草稿、管理员/查看者权限、异步 Markdown/Word 下载和三种视口。
 - 版本化 MM/P2P 验收场景和 PowerShell API 演示脚本；可重复完成项目创建、Agent 建图、连线修改、发布、创建两个持久化导出任务并下载双格式蓝图，输出包含两个 `export_id` 的验收摘要。
@@ -191,7 +192,7 @@
 
 ### 3.4 本轮验证记录（2026-08-09）
 
-- 后端 `ruff check app tests alembic` 通过，pytest 80 项通过，包含 13 个检索和 8 个 GAP 固定评估案例、跨流程/跨 Release GAP 规则隔离、版本化验收场景完整 API 闭环、异步导出持久化/下载/过期/失败/权限与迁移、`update_edge` 有效/非法/重复/原子回滚、自然语言连线增改删及重复/缺失/歧义错误，以及 DeepSeek 时限/重试、角色门禁、发布 GAP 审计、JWT、证据门禁、外部模型策略、日志脱敏、数据库事务回滚和依赖/导出失败保图。
+- 后端 `ruff check app tests alembic` 通过，pytest 84 项通过，包含数据库 readiness 安全失败、Docker 构建上下文与 Compose 暴露面静态红线、13 个检索和 8 个 GAP 固定评估案例、跨流程/跨 Release GAP 规则隔离、版本化验收场景完整 API 闭环、异步导出持久化/下载/过期/失败/权限与迁移、`update_edge` 有效/非法/重复/原子回滚、自然语言连线增改删及重复/缺失/歧义错误，以及 DeepSeek 时限/重试、角色门禁、发布 GAP 审计、JWT、证据门禁、外部模型策略、日志脱敏、数据库事务回滚和依赖/导出失败保图。
 - 依赖/导出失败回归通过：知识服务和 Provider 故障分别返回稳定错误；DOCX 渲染故障返回通用 500；三类失败后当前流程仍为修订 0，修订表与 ChangeLog 无新增记录。
 - SQLite 故障注入在 `ChangeLog` INSERT 阶段抛出 `OperationalError`，验证 API 返回安全的 `DATABASE_WRITE_FAILED`（503）并保留请求号；重新打开 Session 后流程修订号、修订表和 ChangeLog 均无部分更新。
 - 前端 Vitest 30 项、TypeScript typecheck 和 production build 通过；覆盖异步导出创建、轮询、下载、统一截止时间、显式取消，以及成员 API、项目策略、导出文件名、导出失败错误、OIDC 配置、同源回调、防开放跳转、登录/退出回调和 Bearer Token 请求头。
@@ -1092,6 +1093,7 @@ V1.0 至少定义以下角色：
 
 - [x] 完成本地历史/恢复、泳道、成员、外部模型策略、故障恢复、持久化发布生命周期、查看者权限、异步蓝图下载和三视口的仓库内 Playwright 验收。
 - [ ] 完成 Docker 和部署验收。
+- [x] 完成 `.dockerignore`、强制数据库密码、API 内网端口、Web 健康检查和数据库 readiness 的静态部署红线测试。
 - [x] 完成数据库迁移、备份恢复和故障排查文档；真实 PostgreSQL 演练仍由 Week 6 独立验收项跟踪。
 - [x] 完成应用依赖、生产源码、前端构建和外部模型数据流安全检查；ChromaDB 无修复版公告按限定攻击面登记复核。
 - [ ] 完成容器基础镜像/操作系统包扫描、SBOM 和生产日志平台联调。

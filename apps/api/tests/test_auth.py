@@ -232,6 +232,7 @@ def test_readiness_requires_oidc_configuration_in_production():
         "status": "ok",
         "provider": "local",
         "authentication": "oidc",
+        "database": "ready",
     }
 
 

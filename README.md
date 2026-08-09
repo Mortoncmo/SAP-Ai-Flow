@@ -211,20 +211,31 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\browser_smoke.
 
 ## Docker Compose
 
-在仓库根目录运行：
+Compose 使用生产模式，不提供数据库默认密码。先复制 `.env.example` 为 `.env`，至少设置目标 OIDC 配置和一个 URL 安全的强 PostgreSQL 密码：
+
+```dotenv
+POSTGRES_DB=sap_blueprint
+POSTGRES_USER=sap_blueprint
+POSTGRES_PASSWORD=<url-safe-strong-secret>
+```
+
+然后在仓库根目录运行：
 
 ```powershell
 docker compose -f .\deploy\docker-compose.yml up --build
 ```
 
 - Web：`http://localhost:8080`
-- API 健康检查：`http://localhost:8000/health/live`
+- API 存活检查：`http://localhost:8080/health/live`
+- API 就绪检查：`http://localhost:8080/health/ready`
 
 Compose 默认使用本地 Provider。使用 DeepSeek 时，在启动命令所在环境或根目录 `.env` 中设置 `AGENT_PROVIDER` 和 `DEEPSEEK_API_KEY`。
 
-Compose 以 `APP_ENV=production` 启动 API，因此还必须在根目录 `.env` 中提供上节列出的后端 `OIDC_ISSUER`、`OIDC_AUDIENCE`、`OIDC_JWKS_URL`，以及前端 `VITE_OIDC_AUTHORITY`、`VITE_OIDC_CLIENT_ID` 和 `VITE_OIDC_AUDIENCE`。未配置时 API readiness 会保持未就绪，Web 服务不会被视为可交付状态。
+Compose 以 `APP_ENV=production` 启动 API，因此还必须在根目录 `.env` 中提供上节列出的后端 `OIDC_ISSUER`、`OIDC_AUDIENCE`、`OIDC_JWKS_URL`，以及前端 `VITE_OIDC_AUTHORITY`、`VITE_OIDC_CLIENT_ID` 和 `VITE_OIDC_AUDIENCE`。未配置认证、Provider 或数据库不可连接时，API readiness 会返回 503，Web 服务不会被视为可交付状态。API 的 8000 端口只在 Compose 容器网络中暴露，外部请求统一经过 Nginx；若部署域名不是 `http://localhost:8080`，同时调整 `CORS_ORIGINS` 和 OIDC 回调地址。
 
 PostgreSQL 数据和 ChromaDB 索引分别持久化到 `postgres-data` 与 `chroma-data` 命名卷。
+
+`.dockerignore` 会从构建上下文排除 `.env`、虚拟环境、`node_modules`、输出目录和原始 Word/Markdown 说明书，防止本地秘密或无关大文件进入 Docker daemon 与镜像构建上下文。
 
 迁移、PostgreSQL/Chroma 备份、恢复确认和 readiness 检查见 [deploy/OPERATIONS.md](deploy/OPERATIONS.md)。
 

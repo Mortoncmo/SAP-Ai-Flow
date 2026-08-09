@@ -2,6 +2,8 @@
 
 本文档面向 `deploy/docker-compose.yml` 的内部部署。备份文件包含项目流程、修订、审计记录和知识索引，必须放在受控存储中，不要上传到 GitHub 或聊天工具。
 
+Compose 不提供 PostgreSQL 默认密码。启动前必须在根目录 `.env` 设置 URL 安全的强 `POSTGRES_PASSWORD`，并配置目标 OIDC；不要把生产 `.env` 加入镜像、备份归档或 Git。
+
 ## 启动与迁移
 
 ```powershell
@@ -11,7 +13,7 @@ docker compose -f .\deploy\docker-compose.yml up -d api web
 Invoke-WebRequest http://localhost:8080/health/ready
 ```
 
-`/health/ready` 返回 `200` 且 `status=ok` 后才允许写入项目。生产 API 必须先配置 OIDC、数据库和 Provider 环境变量。
+通过 Web 入口访问 `/health/ready`；它会检查认证/Provider 配置并实际执行数据库连接查询。只有返回 `200`、`status=ok` 且 `database=ready` 后才允许写入项目。API 的 8000 端口仅在 Compose 网络内暴露，不应绕过 Nginx 直接发布到宿主机或外部负载均衡器。
 
 ## 异步导出保留与恢复
 
