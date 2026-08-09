@@ -50,10 +50,12 @@ def test_settings_accept_compose_list_environment_values(monkeypatch):
 
 def test_api_image_and_nginx_keep_delivery_guards_enabled():
     api_dockerfile = (ROOT / "apps" / "api" / "Dockerfile").read_text(encoding="utf-8")
+    web_dockerfile = (ROOT / "apps" / "web" / "Dockerfile").read_text(encoding="utf-8")
     nginx = (ROOT / "deploy" / "nginx.conf").read_text(encoding="utf-8")
 
     assert api_dockerfile.index("USER app") < api_dockerfile.index("CMD [")
     assert "alembic upgrade head" in api_dockerfile
+    assert "FROM nginx:1.29-alpine" in web_dockerfile
     assert "client_max_body_size 2m" in nginx
     assert "proxy_read_timeout 45s" in nginx
     assert "proxy_connect_timeout 3s" in nginx

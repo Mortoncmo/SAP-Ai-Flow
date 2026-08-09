@@ -25,7 +25,7 @@ ENV VITE_API_TIMEOUT_MS=$VITE_API_TIMEOUT_MS \
     VITE_OIDC_AUDIENCE=$VITE_OIDC_AUDIENCE
 RUN npm --workspace @sap-ai-flow/web run build
 
-FROM nginx:1.27-alpine
+FROM nginx:1.29-alpine
 
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /workspace/apps/web/dist /usr/share/nginx/html
