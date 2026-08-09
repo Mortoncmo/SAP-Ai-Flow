@@ -1,6 +1,6 @@
 # SAP Blueprint AI Agent 实施规格
 
-> 文档状态：整合实施与容量验收工具基线 3.6
+> 文档状态：新版说明追踪与生产验收基线 3.7
 >
 > 实施状态校准：2026-08-09（以当前代码与自动化测试为准）
 >
@@ -27,6 +27,7 @@
 7. 不存储或展示模型内部推理过程，只保存简短决策摘要、结构化 Patch、知识引用和执行结果。
 8. 当前 React 19 和自定义样式继续使用，不降级 React，也不在本阶段整体迁移到 Ant Design。
 9. 模型调用缓存只用于减少完全相同的外部 Provider 调用，不缓存本地规则结果，也不绕过证据校验、Patch 原子执行、权限、修订冲突或数据库事务。
+10. 自然语言修改必须先识别节点、连线、泳道、图标或布局等目标对象；“新增泳道”只允许生成泳道 Patch，不得隐式新增流程节点或连线，除非用户在同一指令中明确要求。
 
 ### 1.1 新版说明合并结论
 
@@ -51,6 +52,27 @@
 | 新版方案缺少生产验收定义 | 未明确事务原子性、跨项目权限、备份恢复、SSO、日志脱敏、依赖安全和多视口验收 | 将这些项目写入测试章节、Definition of Done 和最终验收清单；未在真实环境验证的项目不得标记完成 |
 
 后续需求若与本表结论冲突，必须先更新本实施规格和验收条件，再进入代码实现。
+
+### 1.2 新版说明需求追踪
+
+以下矩阵用于确认《SAP Blueprint AI Agent 产品架构与实施方案计划书 V1.0》Markdown 版的每类要求如何进入当前项目。状态只描述仓库内实现，不替代顾问签字、目标环境联调或真实容量验收。
+
+| 新版说明要求 | 当前整合落点 | 当前状态 | 关闭条件 |
+| --- | --- | --- | --- |
+| 首期聚焦 SAP MM 采购 P2P | `GraphDocument 2.0` 增加 SAP Context，提供五泳道 P2P 基线和 J45 元数据模板，同时保留通用流程图底座 | 仓库内已实现 | 顾问复核 P2P 步骤、角色、T-Code 和适用 Release |
+| 自然语言生成结构化流程图并实时渲染 | FastAPI 接收指令，Provider 只返回原子 `LLMPatch`，服务端校验后由 React Flow 增量渲染 | 已实现并自动化验收 | 目标环境连续修改和真实模型容量验收通过 |
+| 对画布节点执行增改删 | 扩展为节点、连线和泳道三类一等对象的独立增改删；图标和布局也有明确 Patch，不以“流程”节点代替泳道 | 已实现并自动化验收 | “新增三个泳道只新增泳道”等端到端用例持续通过 |
+| J45、T-Code、Fiori App 和 Best Practice RAG 匹配 | 使用版本化 Markdown、ChromaDB 持久化索引、向量/词法混合召回、上下文过滤、引用回链和证据门禁 | 技术链路已实现，生产语料未关闭 | 知识授权完成，SAP 顾问签字标注集和质量门槛通过 |
+| GAP 智能识别和前端预警 | AI 只能产生 `candidate`，顾问执行确认、驳回或解决，所有决策进入审计 | 仓库内已实现 | SAP 顾问扩充正式 GAP 标注集并完成业务验收 |
+| Word / Markdown 一键导出 | 两种格式共用 `BlueprintDocumentModel`，通过持久化异步任务生成、查询和下载 | 内容与任务链路已实现，Word 视觉验收未关闭 | 在具备 LibreOffice 和中文字体的目标环境验证分页、字体、长表格与图片清晰度 |
+| Business、Knowledge、Process 和 Document Agent 分工 | 保留四类逻辑职责，由 LangGraph 做请求级路由；领域校验、永久 ID、权限和事务仍由现有服务层负责 | 已实现 | 编排故障、证据不足和导出预检回归持续通过 |
+| Project、Process、Node 和 ChangeLog 持久化 | 采用更完整的 `Project / Process / ProcessRevision / ChangeLog / GapDecision / ProjectMember / ExportJob` 模型，完整图快照是权威数据 | 已实现 | 目标 PostgreSQL 迁移、备份恢复和运维流程完成签字 |
+| React 18、Ant Design、OpenAI/Claude、WebSocket 等建议选型 | 保留当前已验证的 React 19、自定义设计体系、Provider 抽象和 REST；SSE 仅在未来长任务确有需要时引入 | 已决策 | 若未来变更选型，先给出收益、迁移范围和回归计划 |
+| 12 周、三个里程碑实施计划 | 将当前仓库定义为 Week 0，重排为契约、SAP 能力、知识、GAP、持久化、权限、导出、性能和交付验收 | 已纳入第 15 节 | 每周退出标准和最终验收清单全部关闭 |
+| 顾问人效提升 30% 至 50% | 作为业务价值假设跟踪，不从功能测试结果推导 | 尚未验证 | 选定真实项目，记录人工基线、Agent 辅助耗时、返工率和样本规模后评估 |
+| 输出格式不稳定、SAP 幻觉和节点重叠风险 | 使用 Pydantic、原子 Patch、证据/待确认门禁、Dagre 布局及失败不改图策略 | 仓库内防护已实现 | 固定回归集、顾问质量门槛和真实项目观察均达标 |
+
+本追踪表之外，新版说明未定义但生产交付必须补齐的门槛包括：OIDC 真实身份提供方联调、知识来源授权、跨项目权限、日志脱敏与集中告警、真实外部模型/PostgreSQL 容量、缓存多实例策略、DOCX 跨渲染器检查以及目标环境运维签字。这些项目统一在第 15 至 18 节跟踪，未关闭前不得宣称生产验收完成。
 
 ## 2. 产品定义
 
@@ -215,7 +237,7 @@
 - `scripts/run_capacity_test.ps1` 已在隔离 SQLite/Local Provider 环境完成 1/2/4 并发、每档 5 样本的脚本验收，三档错误率均为 0，P95 分别为 430/90/187 ms；1 ms P95/P99 门槛会正确保存 `passed=false` 报告并返回非零。数据创建确认、远程无 Token 拒绝、SQLite 被 `-RequirePostgreSQL` 拒绝且不进入测试数据创建的门禁均已实跑。该结果只证明工具可用，不是外部模型/PostgreSQL 容量结论。
 - `scripts/run_acceptance_demo.ps1` 已在独立 FastAPI 进程和隔离 SQLite 数据库中实跑通过，发布修订 2 / Release 1，创建两个持久化 `export_id`，并生成内容有效的 Markdown、DOCX 和 JSON 摘要；Windows PowerShell 5 的中文请求/响应已使用显式 UTF-8 字节和流解码验证。
 - 当前环境没有 LibreOffice/`soffice`，DOCX 尚未完成 PNG 级视觉渲染；当前环境没有 Docker CLI，Compose 尚未完成真实 build/up 验收。
-- 缓存切片 GitHub Actions 运行 `31309320723` 的 API、Web 和 `deploy` 三个作业全部通过；`deploy` 作业重新生成并上传 API/Web CycloneDX SBOM，通过两个镜像的可修复 Critical 漏洞门禁，并完成镜像构建、干净 Compose 启动、数据库 readiness、Alembic head、`pg_dump` 和独立数据库恢复验证。
+- 最新 GitHub Actions 运行 `31310909855` 的 API、Web 和 `deploy` 三个作业全部通过且无检查注解；工作流已升级到 Node 24 兼容的官方 Action 主版本。`deploy` 作业重新生成并上传 API/Web CycloneDX SBOM，通过两个镜像的可修复 Critical 漏洞门禁，并完成镜像构建、干净 Compose 启动、PostgreSQL readiness、Alembic head、`pg_dump` 和独立数据库恢复验证。
 
 ### 3.5 基线迁移原则
 
