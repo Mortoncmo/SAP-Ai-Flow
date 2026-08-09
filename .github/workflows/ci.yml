@@ -117,7 +117,7 @@ jobs:
           exit 1
       - name: Verify readiness and migration head
         run: |
-          python -c "import json; p=json.load(open('output/readiness.json')); assert p['status']=='ok' and p['database']=='ready', p"
+          python -c "import json; p=json.load(open('output/readiness.json')); assert p['status']=='ok' and p['database']=='ready' and p['database_backend']=='postgresql', p"
           docker compose -f deploy/docker-compose.yml exec -T api alembic current \
             | tee output/alembic-current.txt
           grep -q '20260809_0005 (head)' output/alembic-current.txt

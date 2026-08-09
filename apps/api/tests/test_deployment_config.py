@@ -76,6 +76,7 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "  deploy:" in workflow
     assert "docker compose -f deploy/docker-compose.yml build" in workflow
     assert "http://127.0.0.1:8080/health/ready" in workflow
+    assert "p['database_backend']=='postgresql'" in workflow
     assert "pg_dump --clean --if-exists --no-owner" in workflow
     assert "sap_blueprint_restore" in workflow
     assert "20260809_0005 (head)" in workflow
