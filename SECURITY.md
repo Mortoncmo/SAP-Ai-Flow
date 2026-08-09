@@ -11,6 +11,7 @@ CI runs:
 - `pip-audit` against API runtime dependencies.
 - `npm audit --omit=dev --audit-level=high` against Web runtime dependencies.
 - `scripts/security_scan.py --include-build` against production sources and the generated Web bundle.
+- Trivy generates CycloneDX SBOMs for both container images and fails the deployment job on Critical OS/library findings with an available fix; currently unfixed findings remain visible in the scan log and uploaded SBOM artifact.
 - Backend redaction tests covering request logs, validation errors, upstream exceptions, ChangeLog content, and external Provider payloads.
 
 ## Temporary Advisory Exception
@@ -25,4 +26,4 @@ CI runs:
 
 The application does not run a Chroma server, expose a Chroma port, mount Chroma's FastAPI routes, or accept model repository configuration. It uses `PersistentClient` or `EphemeralClient` in the API process and exposes only the application's controlled knowledge search endpoints. `tests/test_logging.py::test_chroma_http_api_is_not_exposed` is the regression gate for this deployment assumption.
 
-CI ignores only `PYSEC-2026-311` while these controls remain true. The exception must be removed if a Chroma HTTP server is added, arbitrary embedding functions or model repositories become configurable, or a fixed ChromaDB release becomes available.
+The dependency audit exception and the Trivy unfixed-finding policy remain valid only while these controls hold. The exception must be removed if a Chroma HTTP server is added, arbitrary embedding functions or model repositories become configurable, or a fixed ChromaDB release becomes available.
