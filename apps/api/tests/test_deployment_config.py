@@ -30,6 +30,8 @@ def test_compose_requires_database_password_and_keeps_api_internal():
     assert "${POSTGRES_PASSWORD:?" in api["environment"]["DATABASE_URL"]
     assert api["environment"]["EXPORT_RETENTION_HOURS"] == "${EXPORT_RETENTION_HOURS:-24}"
     assert api["environment"]["EXPORT_STALE_MINUTES"] == "${EXPORT_STALE_MINUTES:-5}"
+    assert api["environment"]["LLM_CACHE_TTL_SECONDS"] == "${LLM_CACHE_TTL_SECONDS:-60}"
+    assert api["environment"]["LLM_CACHE_MAX_ENTRIES"] == "${LLM_CACHE_MAX_ENTRIES:-128}"
     assert api["image"] == "sap-ai-flow-api:${SAP_FLOW_IMAGE_TAG:-local}"
     assert web["image"] == "sap-ai-flow-web:${SAP_FLOW_IMAGE_TAG:-local}"
     assert "ports" not in api

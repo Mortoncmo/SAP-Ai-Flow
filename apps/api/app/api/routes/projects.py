@@ -1,6 +1,7 @@
 import logging
 import re
 from datetime import UTC, datetime
+from functools import lru_cache
 from time import perf_counter
 from urllib.parse import quote
 
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.agent.base import LLMProvider
 from app.agent.orchestrator import ProcessAgentOrchestrator, get_document_orchestrator
+from app.agent.result_cache import ModelResultCache
 from app.api.routes.flowcharts import get_provider
 from app.core.config import Settings, get_settings
 from app.core.errors import FlowchartError
@@ -62,6 +64,20 @@ logger = logging.getLogger(__name__)
 
 def get_repository(session: Session = Depends(get_db_session)) -> BlueprintRepository:
     return BlueprintRepository(session)
+
+
+@lru_cache(maxsize=16)
+def _configured_model_cache(ttl_seconds: float, max_entries: int) -> ModelResultCache:
+    return ModelResultCache(ttl_seconds=ttl_seconds, max_entries=max_entries)
+
+
+def get_model_result_cache(
+    settings: Settings = Depends(get_settings),
+) -> ModelResultCache:
+    return _configured_model_cache(
+        settings.llm_cache_ttl_seconds,
+        settings.llm_cache_max_entries,
+    )
 
 
 @router.post("/projects", response_model=ProjectResponse, status_code=201)
@@ -280,6 +296,7 @@ async def modify_process(
     repository: BlueprintRepository = Depends(get_repository),
     provider: LLMProvider = Depends(get_provider),
     knowledge_service: KnowledgeService = Depends(get_knowledge_service),
+    model_cache: ModelResultCache = Depends(get_model_result_cache),
     user: UserContext = Depends(get_user_context),
 ) -> PersistedModifyResponse:
     process = _authorize_process(repository, process_id, user, ProjectRole.EDITOR)
@@ -291,6 +308,8 @@ async def modify_process(
         provider,
         knowledge_service,
         external_model_enabled=project.external_model_enabled,
+        model_cache=model_cache,
+        cache_namespace=f"{project.id}:{process.id}",
     ).run(
         current_graph,
         request.instruction,
@@ -331,6 +350,8 @@ async def modify_process(
             provider=result.provider,
             model=result.model,
             attempts=result.attempts,
+            model_calls=result.model_calls,
+            cache_status=result.cache_status,
             latency_ms=int((perf_counter() - started) * 1000),
         ),
     )

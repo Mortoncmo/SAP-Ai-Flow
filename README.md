@@ -17,6 +17,7 @@ SAP AI Flow 是一个面向 SAP 业务流程建模的对话式流程图工具。
 - JSON 导入导出和全图 PNG、SVG 导出。
 - 本地规则 Provider 和 DeepSeek Provider。
 - 项目级外部模型开关、调用前脱敏、本地回退和策略变更审计。
+- 项目/流程隔离的外部 Provider 短期结果缓存，支持 TTL/LRU、相同并发调用合并和命中指标，命中后仍执行证据、Patch、修订和事务校验。
 - SAP MM/P2P 元数据、受控知识检索、GAP 候选与人工决策审计。
 - 项目、流程、修订、发布版本、服务端项目成员角色，以及持久化异步 Markdown/Word 蓝图导出。
 - ChromaDB 持久化知识索引、确定性字符 n-gram 向量和精确词法混合召回。
@@ -82,6 +83,8 @@ LLM_TIMEOUT_SECONDS=10
 LLM_TOTAL_TIMEOUT_SECONDS=35
 LLM_MAX_RETRIES=2
 LLM_RETRY_BACKOFF_SECONDS=0.25
+LLM_CACHE_TTL_SECONDS=60
+LLM_CACHE_MAX_ENTRIES=128
 EXPORT_RETENTION_HOURS=24
 EXPORT_STALE_MINUTES=5
 VITE_API_TIMEOUT_MS=40000
@@ -93,6 +96,10 @@ VITE_EXPORT_TIMEOUT_MS=44000
 即使服务端配置了 DeepSeek，新项目仍默认使用“仅本地”策略。项目管理员可在“项目成员”弹窗中显式切换为“允许调用”；启用前界面会提示数据外发，策略变化写入项目审计。项目未启用时，持久化流程修改不会调用外部 Provider，而是回退本地规则并返回 warning。发送给 DeepSeek 的流程和指令会先脱敏客户、供应商、联系人、邮箱、电话和金额等字段。
 
 DeepSeek 单次请求默认 10 秒，最多重试 2 次，但整个 Provider 调用不会超过 35 秒。超时、网络错误、429、5xx 和结构化输出不合法可重试；认证错误和其他 4xx 立即失败。Web 普通 API 默认 40 秒超时，异步导出的任务创建、状态轮询和下载全过程默认 44 秒，Nginx 代理为 45 秒。超时、用户取消或修订冲突不会应用迟到响应，原修改指令会保留供重试。这些 Vite 变量会写入构建产物，调整后需要重新构建 Web。
+
+项目已允许调用外部模型时，持久化流程修改会缓存成功的外部 Provider 结构化结果，默认保留 60 秒、最多 128 项；任一缓存配置设为 `0` 即关闭。缓存按项目、流程、Provider/模型、完整当前图、指令、语言和知识证据计算 SHA-256 键，不保存原始缓存键输入，不跨项目或流程复用。本地规则 Provider、失败结果和无状态兼容接口不缓存；相同并发请求只发起一次上游调用。响应 `metrics.cache_status` 为 `bypassed | miss | hit | shared`，`model_calls` 为 `0 | 1`，前端会显示“缓存命中”或“合并调用”。缓存命中仍重新执行证据校验、原子 Patch、`base_revision` 检查和数据库事务。
+
+当前缓存只存在于单个 API 进程内，进程重启会清空，多实例之间不共享。它用于减少短时间重复请求，不替代真实外部模型/PostgreSQL 的并发、长尾、命中率和容量验收；生产运维边界见 [deploy/OPERATIONS.md](deploy/OPERATIONS.md)。
 
 Markdown/Word 下载默认先创建持久化导出任务，再每 250 毫秒查询 `export_id`，完成后下载。任务覆盖 `pending`、`running`、`completed`、`failed`、`expired` 状态；文件默认保留 24 小时，运行超过 5 分钟的任务允许恢复执行。同步导出 API 仍保留兼容，但 Web 不再使用。当前后台执行依赖 API 进程内任务，文件暂存在应用数据库，不能作为高并发任务队列或永久文档库；生产部署边界见 [deploy/OPERATIONS.md](deploy/OPERATIONS.md)。
 

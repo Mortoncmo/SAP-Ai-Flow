@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import Field
 
 from app.models.graph import GraphDocument, StrictModel
@@ -14,7 +16,9 @@ class ModifyFlowchartRequest(StrictModel):
 class ResponseMetrics(StrictModel):
     provider: str
     model: str
-    attempts: int = Field(ge=1)
+    attempts: int = Field(ge=0)
+    model_calls: int = Field(ge=0, le=1)
+    cache_status: Literal["bypassed", "miss", "hit", "shared"]
     latency_ms: int = Field(ge=0)
 
 

@@ -15,6 +15,24 @@ Invoke-WebRequest http://localhost:8080/health/ready
 
 通过 Web 入口访问 `/health/ready`；它会检查认证/Provider 配置并实际执行数据库连接查询。只有返回 `200`、`status=ok` 且 `database=ready` 后才允许写入项目。API 的 8000 端口仅在 Compose 网络内暴露，不应绕过 Nginx 直接发布到宿主机或外部负载均衡器。
 
+## 外部模型调用缓存
+
+项目管理员明确开启外部模型后，持久化流程修改可复用短时间内完全相同的成功 Provider 结果。部署时显式配置：
+
+```dotenv
+LLM_CACHE_TTL_SECONDS=60
+LLM_CACHE_MAX_ENTRIES=128
+```
+
+- 任一值设为 `0` 即关闭缓存；调整后需要重启 API 进程。
+- 缓存按项目/流程命名空间、Provider/模型、当前图、指令、语言和知识证据隔离，只保存结构化 Provider 结果，不保存完整 API 响应、修订号或 ChangeLog。
+- 本地规则 Provider、外部模型未授权的项目、无状态兼容接口、Provider 异常和被取消的上游任务不写入缓存。
+- 相同键的并发请求在单个事件循环内合并。API 响应通过 `cache_status=bypassed|miss|hit|shared` 和 `model_calls=0|1` 暴露本次调用情况。
+- 命中结果仍重新执行证据验证、原子 Patch、项目权限、`base_revision` 冲突检查和数据库事务。缓存丢失或多实例未共享只影响命中率，不得影响流程正确性。
+- 缓存位于单个 API 进程内，进程重启即清空，多实例之间不共享。目标环境必须结合真实外部模型/PostgreSQL 压测决定继续单实例低并发、引入分布式缓存或仅调整 TTL/容量；当前实现不能作为多实例容量结论。
+
+若怀疑短期结果复用影响排障，可先把任一缓存配置设为 `0` 并滚动重启 API，再使用同一修订重试；不要直接修改流程修订或缓存代码绕过证据和事务校验。恢复配置前记录 `request_id`、`cache_status`、`model_calls`、Provider/模型和流程修订，禁止记录 Prompt、完整图或客户业务数据。
+
 ## 异步导出保留与恢复
 
 Markdown/Word 导出通过持久化 `export_job` 记录状态和临时文件内容。部署时显式配置：

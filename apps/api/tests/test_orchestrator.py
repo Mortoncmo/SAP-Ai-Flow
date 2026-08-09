@@ -2,8 +2,10 @@ from dataclasses import dataclass
 
 import pytest
 
+from app.agent import orchestrator as orchestrator_module
 from app.agent.base import ProviderResult
 from app.agent.orchestrator import DocumentAgentOrchestrator, ProcessAgentOrchestrator
+from app.agent.result_cache import ModelResultCache
 from app.documents.blueprint import BlueprintDocumentModel
 from app.models.graph import SapMetadata, TCodeReference
 from app.models.knowledge import KnowledgeSearchResponse
@@ -33,6 +35,10 @@ class StaticProvider:
         self.calls += 1
         self.evidence = evidence or []
         return ProviderResult(patch=self.patch, provider="static", model="static-v1")
+
+
+class ExternalStaticProvider(StaticProvider):
+    external = True
 
 
 def _insufficient_response() -> KnowledgeSearchResponse:
@@ -143,3 +149,65 @@ def test_document_graph_runs_pending_confirmation_preflight(order_graph):
     assert any("不能作为顾问签字版本" in warning for warning in result.warnings)
     assert result.media_type == "text/markdown; charset=utf-8"
     assert "ME21N" in result.content.decode("utf-8")
+
+
+@pytest.mark.asyncio
+async def test_process_graph_caches_external_result_and_revalidates_patch(
+    order_graph,
+    monkeypatch,
+):
+    knowledge = TrackingKnowledgeService(_insufficient_response())
+    provider = ExternalStaticProvider(
+        LLMPatch.model_validate(
+            {
+                "change_summary": "增加财务泳道。",
+                "operations": [
+                    {
+                        "op": "add_lane",
+                        "ref": "finance_lane",
+                        "lane": {"label": "财务"},
+                    }
+                ],
+            }
+        )
+    )
+    cache = ModelResultCache(ttl_seconds=60, max_entries=8)
+    validations = 0
+    validate_patch_evidence = orchestrator_module.validate_patch_evidence
+
+    def track_validation(*args, **kwargs):
+        nonlocal validations
+        validations += 1
+        return validate_patch_evidence(*args, **kwargs)
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "validate_patch_evidence",
+        track_validation,
+    )
+    orchestrator = ProcessAgentOrchestrator(
+        provider,
+        knowledge,
+        external_model_enabled=True,
+        model_cache=cache,
+        cache_namespace="project-a:process-a",
+    )
+
+    first = await orchestrator.run(order_graph, "增加一个财务泳道", "zh-CN")
+    second = await orchestrator.run(order_graph, "增加一个财务泳道", "zh-CN")
+    isolated = await ProcessAgentOrchestrator(
+        provider,
+        knowledge,
+        external_model_enabled=True,
+        model_cache=cache,
+        cache_namespace="project-b:process-b",
+    ).run(order_graph, "增加一个财务泳道", "zh-CN")
+
+    assert first.cache_status == "miss"
+    assert first.model_calls == 1
+    assert second.cache_status == "hit"
+    assert second.model_calls == 0
+    assert second.attempts == 0
+    assert isolated.cache_status == "miss"
+    assert provider.calls == 2
+    assert validations == 3

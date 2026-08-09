@@ -13,9 +13,10 @@ from sqlalchemy import event, func, select
 from sqlalchemy.exc import OperationalError
 
 from app.agent.base import ProviderResult
+from app.agent.result_cache import ModelResultCache
 from app.api.routes import projects as projects_route
 from app.api.routes.flowcharts import get_provider
-from app.api.routes.projects import get_repository
+from app.api.routes.projects import get_model_result_cache, get_repository
 from app.core.errors import FlowchartError, ProviderError
 from app.db.database import Database
 from app.db.models import (
@@ -322,6 +323,83 @@ def test_external_provider_is_blocked_by_default_and_sensitive_logs_are_redacted
             session.close()
     finally:
         app.dependency_overrides.pop(get_provider, None)
+
+
+def test_model_cache_reuses_provider_result_after_database_rollback(
+    persistence_client,
+):
+    client, database = persistence_client
+    process_id = _create_process(client)
+    session = database.session_factory()
+    try:
+        process = session.get(ProcessRecord, process_id)
+        assert process is not None
+        project_id = process.project_id
+    finally:
+        session.close()
+
+    enabled = client.put(
+        f"/api/v1/projects/{project_id}",
+        json={"external_model_enabled": True},
+    )
+    assert enabled.status_code == 200, enabled.text
+
+    provider = TrackingExternalProvider()
+    cache = ModelResultCache(ttl_seconds=60, max_entries=8)
+    app.dependency_overrides[get_provider] = lambda: provider
+    app.dependency_overrides[get_model_result_cache] = lambda: cache
+
+    def fail_change_log_insert(*_args) -> None:
+        raise OperationalError(
+            "INSERT INTO change_log",
+            {},
+            RuntimeError("simulated cache retry database failure"),
+        )
+
+    try:
+        event.listen(ChangeLogRecord, "before_insert", fail_change_log_insert)
+        try:
+            failed = client.post(
+                f"/api/v1/processes/{process_id}/modify",
+                json={
+                    "request_id": "model-cache-db-failure",
+                    "base_revision": 0,
+                    "instruction": "增加一个外部缓存测试步骤",
+                },
+            )
+        finally:
+            event.remove(ChangeLogRecord, "before_insert", fail_change_log_insert)
+
+        assert failed.status_code == 503, failed.text
+        assert failed.json()["error"]["code"] == "DATABASE_WRITE_FAILED"
+        assert provider.calls == 1
+
+        retried = client.post(
+            f"/api/v1/processes/{process_id}/modify",
+            json={
+                "request_id": "model-cache-db-retry",
+                "base_revision": 0,
+                "instruction": "增加一个外部缓存测试步骤",
+            },
+        )
+        assert retried.status_code == 200, retried.text
+        assert retried.json()["result_revision"] == 1
+        assert retried.json()["metrics"]["cache_status"] == "hit"
+        assert retried.json()["metrics"]["model_calls"] == 0
+        assert retried.json()["metrics"]["attempts"] == 0
+        assert provider.calls == 1
+    finally:
+        app.dependency_overrides.pop(get_provider, None)
+        app.dependency_overrides.pop(get_model_result_cache, None)
+
+    session = database.session_factory()
+    try:
+        process = session.get(ProcessRecord, process_id)
+        assert process is not None
+        assert process.current_revision == 1
+        assert session.scalar(select(func.count()).select_from(ChangeLogRecord)) == 1
+    finally:
+        session.close()
 
 
 def test_ungrounded_provider_patch_is_rejected_without_creating_revision(

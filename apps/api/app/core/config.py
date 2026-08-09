@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     llm_total_timeout_seconds: float = Field(default=35.0, gt=0, le=120)
     llm_max_retries: int = Field(default=2, ge=0, le=5)
     llm_retry_backoff_seconds: float = Field(default=0.25, ge=0, le=5)
+    llm_cache_ttl_seconds: float = Field(default=60.0, ge=0, le=600)
+    llm_cache_max_entries: int = Field(default=128, ge=0, le=2048)
     export_retention_hours: int = Field(default=24, ge=1, le=720)
     export_stale_minutes: int = Field(default=5, ge=1, le=60)
     database_url: str = "sqlite:///../../output/sap_blueprint.db"

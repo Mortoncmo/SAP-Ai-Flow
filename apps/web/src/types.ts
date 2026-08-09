@@ -137,6 +137,8 @@ export interface ModifyResponse {
     provider: string
     model: string
     attempts: number
+    model_calls: number
+    cache_status: 'bypassed' | 'miss' | 'hit' | 'shared'
     latency_ms: number
   }
 }

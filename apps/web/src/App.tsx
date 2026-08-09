@@ -647,8 +647,13 @@ function FlowWorkspace({
       const evidenceLabel = 'evidence' in response && response.evidence.length
         ? ` · ${response.evidence.length} 条证据`
         : ''
+      const cacheLabel = response.metrics.cache_status === 'hit'
+        ? ' · 缓存命中'
+        : response.metrics.cache_status === 'shared'
+          ? ' · 合并调用'
+          : ''
       setMessage(
-        `${response.applied_patch.change_summary}${evidenceLabel} · ${response.metrics.latency_ms} ms · ${response.metrics.provider}`,
+        `${response.applied_patch.change_summary}${evidenceLabel}${cacheLabel} · ${response.metrics.latency_ms} ms · ${response.metrics.provider}`,
       )
       if (response.warnings.length) setError(response.warnings.join(' '))
     } catch (caught) {

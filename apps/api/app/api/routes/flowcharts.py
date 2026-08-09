@@ -48,6 +48,8 @@ async def modify_flowchart(
             provider=result.provider,
             model=result.model,
             attempts=result.attempts,
+            model_calls=int(getattr(provider, "external", True)),
+            cache_status="bypassed",
             latency_ms=latency_ms,
         ),
     )

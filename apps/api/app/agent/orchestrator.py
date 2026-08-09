@@ -7,6 +7,7 @@ from langgraph.graph import END, START, StateGraph
 
 from app.agent.base import LLMProvider, ProviderResult
 from app.agent.local_provider import LocalRuleProvider
+from app.agent.result_cache import CacheStatus, ModelResultCache, build_model_cache_key
 from app.documents.blueprint import BlueprintDocumentModel, render_docx, render_markdown
 from app.graph.evidence import validate_patch_evidence
 from app.graph.patcher import apply_patch
@@ -60,6 +61,8 @@ class ProcessWorkflowState(TypedDict, total=False):
     warnings: list[str]
     effective_provider: LLMProvider
     provider_result: ProviderResult
+    cache_status: CacheStatus
+    model_calls: int
     updated_graph: GraphDocument
 
 
@@ -84,6 +87,8 @@ class ProcessOrchestrationResult:
     provider: str
     model: str
     attempts: int
+    model_calls: int
+    cache_status: CacheStatus
     intent: ProcessIntent
     knowledge_status: KnowledgeStatus
 
@@ -104,10 +109,14 @@ class ProcessAgentOrchestrator:
         knowledge_service: KnowledgeService,
         *,
         external_model_enabled: bool,
+        model_cache: ModelResultCache | None = None,
+        cache_namespace: str = "",
     ) -> None:
         self.provider = provider
         self.knowledge_service = knowledge_service
         self.external_model_enabled = external_model_enabled
+        self.model_cache = model_cache
+        self.cache_namespace = cache_namespace
         self.workflow = self._build_workflow()
 
     async def run(
@@ -138,7 +147,11 @@ class ProcessAgentOrchestrator:
             warnings=output["warnings"],
             provider=provider_result.provider,
             model=provider_result.model,
-            attempts=provider_result.attempts,
+            attempts=(
+                0 if output["cache_status"] == "hit" else provider_result.attempts
+            ),
+            model_calls=output["model_calls"],
+            cache_status=output["cache_status"],
             intent=output["intent"],
             knowledge_status=output["knowledge_status"],
         )
@@ -232,15 +245,45 @@ class ProcessAgentOrchestrator:
             warnings.append("项目未启用外部模型，本次修改已使用本地规则 Provider。")
         return {"effective_provider": effective_provider, "warnings": warnings}
 
-    @staticmethod
-    async def _generate_patch(state: ProcessWorkflowState) -> dict[str, object]:
-        result = await state["effective_provider"].generate_patch(
-            state["current_graph"],
-            state["instruction"],
-            state["locale"],
-            state["evidence"],
-        )
-        return {"provider_result": result}
+    async def _generate_patch(self, state: ProcessWorkflowState) -> dict[str, object]:
+        provider = state["effective_provider"]
+
+        async def call_provider() -> ProviderResult:
+            return await provider.generate_patch(
+                state["current_graph"],
+                state["instruction"],
+                state["locale"],
+                state["evidence"],
+            )
+
+        if (
+            self.model_cache is not None
+            and self.cache_namespace
+            and getattr(provider, "external", True)
+        ):
+            lookup = await self.model_cache.get_or_create(
+                build_model_cache_key(
+                    namespace=self.cache_namespace,
+                    provider=provider,
+                    graph=state["current_graph"],
+                    instruction=state["instruction"],
+                    locale=state["locale"],
+                    evidence=state["evidence"],
+                ),
+                call_provider,
+            )
+            return {
+                "provider_result": lookup.result,
+                "cache_status": lookup.status,
+                "model_calls": lookup.model_calls,
+            }
+
+        result = await call_provider()
+        return {
+            "provider_result": result,
+            "cache_status": "bypassed",
+            "model_calls": int(getattr(provider, "external", True)),
+        }
 
     @staticmethod
     def _validate_patch(state: ProcessWorkflowState) -> dict[str, object]:
