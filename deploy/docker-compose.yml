@@ -15,6 +15,7 @@ services:
     restart: unless-stopped
 
   api:
+    image: sap-ai-flow-api:${SAP_FLOW_IMAGE_TAG:-local}
     build:
       context: ..
       dockerfile: apps/api/Dockerfile
@@ -64,6 +65,7 @@ services:
     restart: unless-stopped
 
   web:
+    image: sap-ai-flow-web:${SAP_FLOW_IMAGE_TAG:-local}
     build:
       context: ..
       dockerfile: apps/web/Dockerfile

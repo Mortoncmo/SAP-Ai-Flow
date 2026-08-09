@@ -28,6 +28,8 @@ def test_compose_requires_database_password_and_keeps_api_internal():
     assert "${POSTGRES_PASSWORD:?" in api["environment"]["DATABASE_URL"]
     assert api["environment"]["EXPORT_RETENTION_HOURS"] == "${EXPORT_RETENTION_HOURS:-24}"
     assert api["environment"]["EXPORT_STALE_MINUTES"] == "${EXPORT_STALE_MINUTES:-5}"
+    assert api["image"] == "sap-ai-flow-api:${SAP_FLOW_IMAGE_TAG:-local}"
+    assert web["image"] == "sap-ai-flow-web:${SAP_FLOW_IMAGE_TAG:-local}"
     assert "ports" not in api
     assert api["expose"] == ["8000"]
     assert web["healthcheck"]["test"][0] == "CMD-SHELL"
@@ -43,3 +45,15 @@ def test_api_image_and_nginx_keep_delivery_guards_enabled():
     assert "client_max_body_size 2m" in nginx
     assert "proxy_read_timeout 45s" in nginx
     assert "proxy_connect_timeout 3s" in nginx
+
+
+def test_ci_exercises_compose_postgres_backup_and_restore():
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    assert "  deploy:" in workflow
+    assert "docker compose -f deploy/docker-compose.yml build" in workflow
+    assert "http://127.0.0.1:8080/health/ready" in workflow
+    assert "pg_dump --clean --if-exists --no-owner" in workflow
+    assert "sap_blueprint_restore" in workflow
+    assert "20260809_0005 (head)" in workflow
+    assert "down --volumes --remove-orphans" in workflow
