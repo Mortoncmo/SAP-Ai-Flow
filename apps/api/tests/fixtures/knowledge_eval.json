@@ -50,8 +50,43 @@
       "required_terms": ["外部信用"]
     },
     {
+      "id": "j45-pr-approval",
+      "query": "采购申请审批 ME54N",
+      "expected_status": "results",
+      "expected_top_source": "kb-mm-j45-project-seed",
+      "required_terms": ["ME54N"]
+    },
+    {
+      "id": "j45-source-assignment",
+      "query": "供货源分配 ME57",
+      "expected_status": "results",
+      "expected_top_source": "kb-mm-j45-project-seed",
+      "required_terms": ["ME57"]
+    },
+    {
+      "id": "flexible-workflow-roles",
+      "query": "采购审批人业务角色职责",
+      "expected_status": "results",
+      "expected_top_source": "kb-mm-flexible-workflow-project-seed",
+      "required_terms": ["业务角色"]
+    },
+    {
       "id": "negative-hr-payroll",
       "query": "员工入职和薪资核算",
+      "expected_status": "insufficient_evidence",
+      "expected_top_source": null,
+      "required_terms": []
+    },
+    {
+      "id": "negative-pp-production-order",
+      "query": "生产订单报工和物料需求计划",
+      "expected_status": "insufficient_evidence",
+      "expected_top_source": null,
+      "required_terms": []
+    },
+    {
+      "id": "negative-sd-return-billing",
+      "query": "销售订单退货并开具红字发票",
       "expected_status": "insufficient_evidence",
       "expected_top_source": null,
       "required_terms": []
@@ -62,25 +97,65 @@
       "id": "candidate-dynamic-approval",
       "requirement": "跨部门多级审批，需要按项目和预算动态分配审批人",
       "expected_outcome": "candidate",
-      "expected_category": "审批增强"
+      "expected_category": "审批增强",
+      "expected_evidence_source": "kb-mm-common-gaps-project-seed",
+      "expected_pattern_ref": "kb-mm-common-gaps-project-seed#gap-dynamic-approval-dimensions"
     },
     {
       "id": "candidate-external-credit",
       "requirement": "采购订单提交前必须调用外部信用校验 API",
       "expected_outcome": "candidate",
-      "expected_category": "外部集成"
+      "expected_category": "外部集成",
+      "expected_evidence_source": "kb-mm-common-gaps-project-seed",
+      "expected_pattern_ref": "kb-mm-common-gaps-project-seed#gap-external-credit-check"
+    },
+    {
+      "id": "candidate-external-compliance",
+      "requirement": "采购订单提交前必须调用供应商外部校验 API",
+      "expected_outcome": "candidate",
+      "expected_category": "外部集成",
+      "expected_evidence_source": "kb-mm-common-gaps-project-seed",
+      "expected_pattern_ref": "kb-mm-common-gaps-project-seed#gap-external-credit-check"
     },
     {
       "id": "no-gap-standard-pr",
       "requirement": "使用 ME51N 创建采购申请",
       "expected_outcome": "no_candidate",
-      "expected_category": null
+      "expected_category": null,
+      "expected_evidence_source": "kb-mm-j45-project-seed",
+      "expected_pattern_ref": null
+    },
+    {
+      "id": "no-gap-standard-gr",
+      "requirement": "使用 MIGO 完成货物接收",
+      "expected_outcome": "no_candidate",
+      "expected_category": null,
+      "expected_evidence_source": "kb-mm-j45-project-seed",
+      "expected_pattern_ref": null
+    },
+    {
+      "id": "no-gap-standard-workflow",
+      "requirement": "采购申请使用标准 Flexible Workflow 审批",
+      "expected_outcome": "no_candidate",
+      "expected_category": null,
+      "expected_evidence_source": "kb-mm-flexible-workflow-project-seed",
+      "expected_pattern_ref": null
     },
     {
       "id": "insufficient-hr-payroll",
       "requirement": "员工入职和薪资核算",
       "expected_outcome": "insufficient_evidence",
-      "expected_category": null
+      "expected_category": null,
+      "expected_evidence_source": null,
+      "expected_pattern_ref": null
+    },
+    {
+      "id": "insufficient-sd-return-billing",
+      "requirement": "销售订单退货并开具红字发票",
+      "expected_outcome": "insufficient_evidence",
+      "expected_category": null,
+      "expected_evidence_source": null,
+      "expected_pattern_ref": null
     }
   ],
   "quality_gates": {

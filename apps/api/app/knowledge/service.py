@@ -16,6 +16,8 @@ from app.models.knowledge import (
     KnowledgeSearchResponse,
 )
 
+MIN_EVIDENCE_SCORE = 0.3
+
 
 class KnowledgeService:
     def __init__(
@@ -65,7 +67,11 @@ class KnowledgeService:
                 candidates.append((score, chunk))
 
         candidates.sort(key=lambda item: item[0], reverse=True)
-        top = candidates[: request.top_k]
+        top = (
+            candidates[: request.top_k]
+            if candidates and candidates[0][0] >= MIN_EVIDENCE_SCORE
+            else []
+        )
         evidence = [
             self._to_evidence(chunk, score, request.query) for score, chunk in top
         ]
@@ -105,6 +111,11 @@ class KnowledgeService:
         for chunk in self.indexed_chunks:
             metadata = chunk.metadata
             if str(metadata.get("module", "")).upper() != request.module.upper():
+                continue
+            if str(metadata.get("process_scope", "")).upper() != request.process_scope.upper():
+                continue
+            knowledge_release = str(metadata.get("sap_release", ""))
+            if knowledge_release and knowledge_release != request.sap_context.release:
                 continue
             for pattern in metadata.get("gap_patterns", []) or []:
                 keywords = [str(item).lower() for item in pattern.get("keywords", [])]

@@ -150,6 +150,77 @@ def test_production_service_returns_no_pending_project_seed():
     assert result.evidence == []
 
 
+def test_gap_analysis_filters_patterns_by_process_scope_and_release(tmp_path: Path):
+    documents = {
+        "a-wrong-release.md": """---
+source_id: wrong-release
+module: MM
+process_scope: P2P
+sap_release: "2023"
+license_status: project_provided
+review_status: approved
+gap_patterns:
+  - id: old-external-check
+    keywords: [外部信用, API]
+    category: 错误版本
+---
+# Old release
+## Rule
+旧版本的外部信用 API 规则。
+""",
+        "b-wrong-scope.md": """---
+source_id: wrong-scope
+module: MM
+process_scope: INVENTORY
+sap_release: "2024"
+license_status: project_provided
+review_status: approved
+gap_patterns:
+  - id: inventory-external-check
+    keywords: [外部信用, API]
+    category: 错误流程
+---
+# Inventory
+## Rule
+库存流程的外部信用 API 规则。
+""",
+        "z-matching-context.md": """---
+source_id: matching-context
+module: MM
+process_scope: P2P
+sap_release: "2024"
+license_status: project_provided
+review_status: approved
+---
+# Current P2P
+## Integration review
+P2P 2024 可对外部信用 API 集成需求进行方案评审，本来源未定义 GAP 规则。
+""",
+    }
+    for filename, content in documents.items():
+        (tmp_path / filename).write_text(content, encoding="utf-8")
+
+    index = KnowledgeIndex(
+        chromadb.EphemeralClient(),
+        "gap_context_filter_test",
+        128,
+        allow_pending=False,
+    )
+    service = KnowledgeService(tmp_path, index, allow_pending=False)
+
+    result = service.analyze_gap(
+        GapAnalyzeRequest(
+            business_requirement="采购订单提交前调用外部信用 API",
+            process_scope="P2P",
+            sap_context=SapContext(release="2024"),
+        )
+    )
+
+    assert result.outcome == "no_candidate"
+    assert result.gap is None
+    assert {item.source_id for item in result.evidence} == {"matching-context"}
+
+
 def test_exact_tcode_query_ranks_j45_without_unrelated_gap_sections():
     root = Path(__file__).resolve().parents[3] / "SAP_Knowledge"
     index = KnowledgeIndex(
@@ -246,6 +317,24 @@ def test_fixed_project_evaluation_set_meets_quality_gates():
                 gap_failures.append(
                     f"{case['id']}: category={actual_category}, "
                     f"expected={case['expected_category']}"
+                )
+        expected_evidence_source = case["expected_evidence_source"]
+        actual_evidence_sources = {item.source_id for item in result.evidence}
+        if expected_evidence_source is None:
+            if result.outcome == "insufficient_evidence" and result.evidence:
+                gap_failures.append(
+                    f"{case['id']}: expected no evidence, got {sorted(actual_evidence_sources)}"
+                )
+        elif expected_evidence_source not in actual_evidence_sources:
+            gap_failures.append(
+                f"{case['id']}: missing evidence source {expected_evidence_source}"
+            )
+        expected_pattern_ref = case["expected_pattern_ref"]
+        if expected_pattern_ref is not None:
+            actual_refs = result.gap.evidence_refs if result.gap else []
+            if expected_pattern_ref not in actual_refs:
+                gap_failures.append(
+                    f"{case['id']}: missing GAP pattern ref {expected_pattern_ref}"
                 )
         if result.gap is not None and result.gap.status != "candidate":
             gap_failures.append(f"{case['id']}: non-candidate status={result.gap.status}")
