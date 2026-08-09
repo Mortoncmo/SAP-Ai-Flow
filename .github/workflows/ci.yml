@@ -42,6 +42,34 @@ jobs:
       - run: npm audit --omit=dev --audit-level=high
       - run: python scripts/security_scan.py --include-build
 
+  docx-render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/api/requirements.txt
+      - name: Install LibreOffice, Poppler, and Chinese fonts
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+            libreoffice-writer poppler-utils fonts-noto-cjk
+          fc-cache --force
+      - name: Install DOCX renderer dependencies
+        run: pip install -r apps/api/requirements.txt
+      - name: Render and verify representative SAP blueprint DOCX
+        run: python scripts/verify_docx_render.py --output-dir output/docx-render-qa
+      - name: Upload DOCX render QA evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: docx-render-qa
+          path: output/docx-render-qa
+          if-no-files-found: warn
+          retention-days: 14
+
   deploy:
     runs-on: ubuntu-latest
     env:

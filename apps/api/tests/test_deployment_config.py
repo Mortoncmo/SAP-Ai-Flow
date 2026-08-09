@@ -83,14 +83,24 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert workflow.count("aquasecurity/trivy-action@v0.36.0") == 4
     assert "output/sap-ai-flow-api.cdx.json" in workflow
     assert "output/sap-ai-flow-web.cdx.json" in workflow
-    assert workflow.count("actions/checkout@v5") == 3
-    assert "actions/setup-python@v6" in workflow
+    assert workflow.count("actions/checkout@v5") == 4
+    assert workflow.count("actions/setup-python@v6") == 2
     assert "actions/setup-node@v5" in workflow
     assert "actions/upload-artifact@v7" in workflow
     assert "severity: CRITICAL" in workflow
     assert "ignore-unfixed: true" in workflow
     assert 'exit-code: "1"' in workflow
     assert "down --volumes --remove-orphans" in workflow
+
+
+def test_ci_renders_docx_with_libreoffice_poppler_and_chinese_fonts():
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    assert "  docx-render:" in workflow
+    assert "libreoffice-writer poppler-utils fonts-noto-cjk" in workflow
+    assert "scripts/verify_docx_render.py --output-dir output/docx-render-qa" in workflow
+    assert "name: docx-render-qa" in workflow
+    assert "if-no-files-found: warn" in workflow
 
 
 def test_capacity_harness_has_release_metrics_and_safety_guards():
