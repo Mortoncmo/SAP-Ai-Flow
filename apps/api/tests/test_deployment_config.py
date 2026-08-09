@@ -85,7 +85,7 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert workflow.count("actions/checkout@v5") == 3
     assert "actions/setup-python@v6" in workflow
     assert "actions/setup-node@v5" in workflow
-    assert "actions/upload-artifact@v5" in workflow
+    assert "actions/upload-artifact@v7" in workflow
     assert "severity: CRITICAL" in workflow
     assert "ignore-unfixed: true" in workflow
     assert 'exit-code: "1"' in workflow
