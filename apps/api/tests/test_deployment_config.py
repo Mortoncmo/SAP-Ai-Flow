@@ -2,6 +2,8 @@ from pathlib import Path
 
 import yaml
 
+from app.core.config import Settings
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -34,6 +36,16 @@ def test_compose_requires_database_password_and_keeps_api_internal():
     assert api["expose"] == ["8000"]
     assert web["healthcheck"]["test"][0] == "CMD-SHELL"
     assert "/health/ready" in web["healthcheck"]["test"][1]
+
+
+def test_settings_accept_compose_list_environment_values(monkeypatch):
+    monkeypatch.setenv("OIDC_ALGORITHMS", "RS256,ES256")
+    monkeypatch.setenv("CORS_ORIGINS", "http://localhost:8080,https://flow.example.com")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.oidc_algorithms == ["RS256", "ES256"]
+    assert settings.cors_origins == ["http://localhost:8080", "https://flow.example.com"]
 
 
 def test_api_image_and_nginx_keep_delivery_guards_enabled():
