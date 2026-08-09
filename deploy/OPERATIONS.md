@@ -70,7 +70,8 @@ EXPORT_WORKER_BATCH_SIZE=8
 - 生产 API 只创建和查询任务，不执行文档渲染；独立 Worker 轮询 `pending` 和超过陈旧阈值的 `running` 任务。非开发环境配置为 `inline` 时 readiness 返回 503。
 - Worker 领取任务时原子生成 `claim_token` 并递增 `attempt_count`。完成或失败写回必须匹配当前 Token；旧 Worker 被新实例接管后不能覆盖新结果。
 - Worker 每轮都会把到期任务转为 `expired` 并清空二进制内容。低流量实例也会按轮询周期清理，但仍必须监控 `export_job` 表容量、失败率、陈旧接管次数和平均渲染时长。
-- 可以启动多个 Worker，但真实多实例并发、进程滚动重启、五分钟以上长文档和批量上限必须在目标 PostgreSQL 环境验证后才能确定实例数、轮询周期和陈旧阈值。
+- 可以启动多个 Worker；目标业务负载下的并发吞吐、进程滚动重启、五分钟以上长文档和批量上限仍必须在目标 PostgreSQL 环境验证后才能确定实例数、轮询周期和陈旧阈值。
+- GitHub Compose 基线已扩容到两个健康 Worker，并以 12 个普通任务验证 `attempt_count=1`，以 1 个预置陈旧任务验证 `attempt_count=2` 和旧 Token 写回拒绝；该门禁证明并发正确性，不替代目标工作负载的吞吐量和长文档中断恢复结论。
 - Worker 结构化日志只允许记录 `export_id`、尝试次数、结果和异常类型，不得记录蓝图正文、Prompt、认证信息或客户业务数据。
 - 应用数据库只保存短期下载内容，不是永久文档库。正式蓝图下载后必须转存到有权限、保留期和备份策略的受控文档库。
 
@@ -173,4 +174,4 @@ Invoke-WebRequest -UseBasicParsing http://localhost:8080/health/ready
 
 ## 当前验收边界
 
-本机没有 Docker CLI，因此 Compose build/up、真实 PostgreSQL、卷归档和恢复尚未完成本机实跑。GitHub Actions 运行 `31315316964` 已验证 PostgreSQL/API/Worker/Web 全部运行、readiness 返回 `export_execution=worker`、Alembic 为 `20260809_0006 (head)`，并通过真实 PostgreSQL 导出任务确认 `attempt_count=1`、租约释放和内容持久化；备份恢复后迁移头仍为 0006。目标环境仍需按本文档执行卷归档、恢复和多 Worker 演练，并归档命令输出、SHA256、readiness 与导出验收结果。
+本机没有 Docker CLI，因此 Compose build/up、真实 PostgreSQL、卷归档和恢复尚未完成本机实跑。GitHub Actions 运行 `31316347775` 已验证 PostgreSQL/API/Web、两个健康 Worker、`export_execution=worker` 和 Alembic `20260809_0006 (head)`；12 个普通任务全部恰好执行一次，陈旧任务只接管一次且旧 Token 写回被拒绝，备份恢复后迁移头仍为 0006。目标环境仍需按本文档执行卷归档、恢复、长文档滚动中断和容量演练，并归档命令输出、SHA256、readiness 与导出验收结果。
