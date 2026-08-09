@@ -1,6 +1,6 @@
 # SAP Blueprint AI Agent 实施规格
 
-> 文档状态：整合实施与部署验收候选基线 3.3
+> 文档状态：整合实施与自动化部署验收基线 3.3
 >
 > 实施状态校准：2026-08-09（以当前代码与自动化测试为准）
 >
@@ -158,7 +158,7 @@
 - 持久化异步导出任务和 `export_id` 查询/下载：状态覆盖 `pending`、`running`、`completed`、`failed`、`expired`，支持数据库原子抢占、陈旧任务恢复、失败安全响应、到期内容清理和项目查看者权限校验；同步导出接口仅保留兼容用途。
 - Docker、Docker Compose、Nginx 和 GitHub Actions 基线；API 镜像已复制 `SAP_Knowledge` 和 Alembic 文件，并以非 root 用户运行。
 - Docker 构建上下文通过 `.dockerignore` 排除秘密、依赖、输出和原始说明书；Compose 强制提供 PostgreSQL 密码，API 8000 端口只在容器网络暴露，Web 以数据库感知的 readiness 做端到端健康检查，API/Web 镜像使用可由 `SAP_FLOW_IMAGE_TAG` 覆盖的稳定名称。
-- GitHub Actions 已加入独立 `deploy` 验收作业：在干净 Ubuntu runner 构建 Compose 镜像、启动 PostgreSQL/API/Web、校验数据库 readiness 和 Alembic `20260809_0005 (head)`，再执行 `pg_dump`、恢复到独立数据库并核对迁移版本；该作业通过前仍只视为验收候选。
+- GitHub Actions 独立 `deploy` 验收作业已在干净 Ubuntu runner 构建 Compose 镜像、启动 PostgreSQL/API/Web、校验数据库 readiness 和 Alembic `20260809_0005 (head)`，再执行 `pg_dump`、恢复到独立数据库并核对迁移版本。
 - 前后端自动化测试基线，以及迁移、导出结构和典型项目闭环的回归覆盖。
 - 可自行分配端口并启动当前 API、Web 和隔离 SQLite 数据库的 Playwright CLI smoke；覆盖本地撤销/重做/自动布局/刷新恢复、泳道不误增节点、成员 CRUD、外部模型二次确认与审计、取消/超时/修订冲突恢复、本地 Patch P95、持久化修改/发布/历史回看/新草稿、管理员/查看者权限、异步 Markdown/Word 下载和三种视口。
 - 版本化 MM/P2P 验收场景和 PowerShell API 演示脚本；可重复完成项目创建、Agent 建图、连线修改、发布、创建两个持久化导出任务并下载双格式蓝图，输出包含两个 `export_id` 的验收摘要。
@@ -166,13 +166,12 @@
 ### 3.2 尚未完成
 
 - 具体身份提供方和 PostgreSQL/Docker 环境的跨环境浏览器回归仍需扩展；当前 SQLite 隔离环境已覆盖持久化修改、发布、回看、新草稿、成员 CRUD、外部模型策略、查看者权限、蓝图下载失败、核心权限矩阵、跨项目访问和发布预检。
-- PostgreSQL 迁移、备份和恢复的自动化验收步骤已经写入 GitHub Actions `deploy` 作业，但尚待首次远程 CI 实跑通过；Alembic 升级/回滚与事务写入故障注入已在 SQLite 回归测试中通过。
 - 知识库授权审核、顾问正式标注与质量门槛评审、生产语义嵌入模型选型尚未完成；当前已有固定自动化评估集，但 ChromaDB 仍使用离线可重复的字符 n-gram 哈希向量，不宣称具备完整语义 RAG 质量。
 - 具体 SSO/OIDC 身份提供方的客户端注册、真实登录/退出联调和租户级隔离尚未完成；通用 SPA PKCE 与 Bearer Token 接入已完成，`X-User-ID` 仅保留在开发环境。
 - 容器基础镜像和操作系统包漏洞扫描、集中日志采集/保留策略、告警规则和生产日志平台联调尚未完成；应用级请求/异常/审计脱敏与秘密扫描已具备自动化红线测试。
 - LangGraph 编排、Python SDK、CLI 和 BPMN 导出。
 - 当前后台导出执行仍依赖 FastAPI 进程内 `BackgroundTasks`，导出二进制暂存应用数据库；尚未引入独立任务队列、Worker 和对象存储，因此不能把当前实现视为高并发、多实例或永久文档存储方案。
-- 当前机器无 Docker CLI，不能提供本机 Compose 实跑证据；镜像 build/up、PostgreSQL readiness、迁移及备份恢复改由 GitHub Ubuntu runner 验收，中文字体和 DOCX 排版仍需带 LibreOffice 的目标环境单独验收。
+- 当前机器无 Docker CLI，不能提供本机 Compose 实跑证据；镜像 build/up、PostgreSQL readiness、迁移及备份恢复已由 GitHub Ubuntu runner 验收通过，中文字体和 DOCX 排版仍需带 LibreOffice 的目标环境单独验收。
 - 生产备份、恢复、迁移和 readiness 操作已写入 `deploy/OPERATIONS.md`，真实卷归档与恢复演练仍需 Docker 环境。
 - 真实外部模型和 PostgreSQL 环境的并发、长尾性能、缓存命中率与容量压测尚未完成；当前只证明本地 Patch 20 次采样 P95 小于 1 秒。
 
@@ -190,7 +189,7 @@
 - 当前权限实现已从服务端 `ProjectMemberRecord` 解析项目角色，不再信任客户端 `X-Project-Role`；开发环境缺省身份为 `local-user`，生产环境只接受通过 OIDC/JWKS 校验的 Bearer JWT。前端已具备 SPA PKCE 登录、回调、退出和 Token 注入，具体身份提供方客户端注册及部署联调完成前，仍不能视为完整生产认证方案。
 - 当前知识检索已使用 ChromaDB 持久化索引和向量/词法混合排序；开发环境允许待审核种子并保持待确认标识，生产环境只索引授权且顾问审核通过的语料。固定自动化评估集已完成，顾问正式标注、质量门槛签字和生产语义嵌入模型仍待完成。
 - 当前离线混合检索要求最高候选分数至少达到 0.30，达到门槛后保留同一查询的相关支持证据；PP 生产订单和 SD 退货开票等近邻负例必须返回证据不足。GAP 规则除模块外还必须与流程范围和 SAP Release 一致，禁止跨范围或跨版本套用候选规则。
-- 当前部署配置已具备稳定镜像命名和可重复的 Compose/PostgreSQL 验收作业，但远程 `deploy` 作业通过前，不勾选 Docker、PostgreSQL 迁移或备份恢复的最终验收项。
+- 当前部署配置已具备稳定镜像命名和可重复的 Compose/PostgreSQL 验收作业；远程 `deploy` 作业已验证干净构建、启动、readiness、迁移、备份和恢复。
 
 ### 3.4 本轮验证记录（2026-08-09）
 
@@ -206,7 +205,7 @@
 - `scripts/browser_smoke.ps1` 与 `scripts/browser_smoke.js` 已固化本地历史/恢复、泳道、连线双入口增改删、成员 CRUD、外部模型策略、取消/超时/冲突恢复、本地 P95、持久化发布生命周期、管理员/查看者权限、异步任务 `202`/`export_id`/`pending` 与实际下载，以及三视口回归；还需在真实外部模型/PostgreSQL 环境扩展并发、长尾与容量测试。
 - `scripts/run_acceptance_demo.ps1` 已在独立 FastAPI 进程和隔离 SQLite 数据库中实跑通过，发布修订 2 / Release 1，创建两个持久化 `export_id`，并生成内容有效的 Markdown、DOCX 和 JSON 摘要；Windows PowerShell 5 的中文请求/响应已使用显式 UTF-8 字节和流解码验证。
 - 当前环境没有 LibreOffice/`soffice`，DOCX 尚未完成 PNG 级视觉渲染；当前环境没有 Docker CLI，Compose 尚未完成真实 build/up 验收。
-- GitHub Actions `deploy` 作业的 YAML 解析、静态断言和本地安全扫描已通过；本记录不把“工作流代码存在”等同于“远程容器验收通过”，首次远程结果需在推送后补录。
+- GitHub Actions 运行 `31304518020` 的 API、Web 和 `deploy` 三个作业全部通过；`deploy` 作业完成镜像构建、干净 Compose 启动、数据库 readiness、Alembic head、`pg_dump` 和独立数据库恢复验证。
 
 ### 3.5 基线迁移原则
 
@@ -1026,8 +1025,7 @@ V1.0 至少定义以下角色：
 - [x] 新增 `export_job` 持久化模型和 0005 Alembic 迁移，完成 SQLite 升级/回滚覆盖。
 - [x] 更新 Docker Compose，增加 PostgreSQL。
 - [x] 完成 Alembic SQLite 升级/回滚测试。
-- [ ] 完成 PostgreSQL 迁移、备份和恢复测试。
-  验收自动化已实现：GitHub Actions 将启动干净 Compose 栈、核对数据库 readiness/Alembic head，并完成 `pg_dump` 与独立数据库恢复；等待远程 `deploy` 作业通过后勾选。
+- [x] 完成 PostgreSQL 迁移、备份和恢复自动化测试：GitHub Actions 在干净 Compose 栈核对数据库 readiness/Alembic head，并完成 `pg_dump` 与独立数据库恢复。
 
 退出标准：图、泳道、图标、布局和 SAP 元数据可完整保存；事务失败不产生半条修订。
 
@@ -1096,7 +1094,8 @@ V1.0 至少定义以下角色：
 ### Week 12：交付与验收
 
 - [x] 完成本地历史/恢复、泳道、成员、外部模型策略、故障恢复、持久化发布生命周期、查看者权限、异步蓝图下载和三视口的仓库内 Playwright 验收。
-- [ ] 完成 Docker 和部署验收；干净 Compose build/up、readiness、迁移和 PostgreSQL 备份恢复已进入 GitHub Actions `deploy` 作业，等待远程实跑结果。
+- [x] 完成 GitHub Actions 干净 Compose build/up、readiness、迁移和 PostgreSQL 备份恢复验收。
+- [ ] 完成目标环境部署、集中日志/告警和运行维护签字。
 - [x] 完成 `.dockerignore`、强制数据库密码、API 内网端口、Web 健康检查和数据库 readiness 的静态部署红线测试。
 - [x] 完成数据库迁移、备份恢复和故障排查文档；真实 PostgreSQL 演练仍由 Week 6 独立验收项跟踪。
 - [x] 完成应用依赖、生产源码、前端构建和外部模型数据流安全检查；ChromaDB 无修复版公告按限定攻击面登记复核。
@@ -1146,7 +1145,7 @@ V1.0 至少定义以下角色：
 - [x] 版本冲突不会覆盖较新修订。
 - [x] 模型、知识库和导出失败时当前图保持可用。
 - [x] 项目权限、数据脱敏和外部模型策略生效。
-- [ ] Docker Compose 可在干净环境启动全部 V1.0 服务（验收工作流已实现，待 GitHub Actions `deploy` 作业通过）。
+- [x] Docker Compose 可在干净 GitHub Ubuntu runner 启动全部 V1.0 服务，并完成 PostgreSQL 迁移、备份和恢复。
 
 ## 18. 下一开发切片
 
@@ -1155,7 +1154,7 @@ V1.0 至少定义以下角色：
 1. 在目标 SSO/OIDC 身份提供方登记 SPA 客户端、回调地址和 API audience，完成真实登录、退出、Token 刷新/过期及部署联调；通用 Authorization Code + PKCE、Bearer Token 注入和应用日志治理已完成。
 2. 完成知识来源/授权顾问审核、正式标注集和生产语义嵌入模型对比；ChromaDB 持久化、离线混合召回和固定自动化评估集已完成。
 3. 在真实外部模型/PostgreSQL 环境完成并发、长尾和容量测试；同时验证多实例下导出任务抢占与陈旧恢复，并决定生产环境采用独立队列/Worker 和对象存储还是限制为单实例低并发部署。
-4. 先让 GitHub Actions `deploy` 作业完成 PostgreSQL、Compose、迁移和备份恢复的干净环境验收，再在具备 LibreOffice 和中文字体的目标环境完成 DOCX 视觉渲染；应用数据库中的导出二进制不得被当作永久交付物存储。
+4. 在具备 LibreOffice 和中文字体的目标环境完成 DOCX 视觉渲染、部署联调和运行维护签字；应用数据库中的导出二进制不得被当作永久交付物存储。
 5. Tool 契约、真实认证和向量检索稳定后再评估 LangGraph；Python SDK、CLI 和 BPMN 保持后续优先级。
 
-当前本机可执行的最终流程编辑验收项已全部完成。生产验收剩余门槛是 GitHub Actions Compose/PostgreSQL 实跑、具体身份提供方、知识授权与顾问签字、集中日志、真实外部模型容量、LibreOffice 视觉检查和目标环境部署联调；这些项目未验证前不得宣称生产验收完成。
+当前本机可执行的最终流程编辑验收项和 GitHub Actions Compose/PostgreSQL 自动化部署验收已完成。生产验收剩余门槛是具体身份提供方、知识授权与顾问签字、集中日志、真实外部模型容量、LibreOffice 视觉检查和目标环境部署联调；这些项目未验证前不得宣称生产验收完成。
