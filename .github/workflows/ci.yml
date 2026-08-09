@@ -150,12 +150,24 @@ jobs:
           docker compose -f deploy/docker-compose.yml exec -T api alembic current \
             | tee output/alembic-current.txt
           grep -q '20260809_0006 (head)' output/alembic-current.txt
-      - name: Exercise PostgreSQL export worker
+      - name: Exercise PostgreSQL multi-worker fencing
         run: |
+          docker compose -f deploy/docker-compose.yml up -d --scale worker=2 worker
+          for attempt in {1..30}; do
+            mapfile -t worker_ids < <(docker compose -f deploy/docker-compose.yml ps -q worker)
+            if [ "${#worker_ids[@]}" = "2" ] && \
+              [ "$(docker inspect --format '{{.State.Health.Status}}' "${worker_ids[@]}" | grep -c '^healthy$')" = "2" ]; then
+              break
+            fi
+            sleep 1
+          done
+          mapfile -t worker_ids < <(docker compose -f deploy/docker-compose.yml ps -q worker)
+          test "${#worker_ids[@]}" = "2"
+          test "$(docker inspect --format '{{.State.Health.Status}}' "${worker_ids[@]}" | grep -c '^healthy$')" = "2"
           docker compose -f deploy/docker-compose.yml exec -T api \
             python -m app.workers.export_worker_acceptance \
             | tee output/export-worker-acceptance.json
-          python -c "import json; p=json.load(open('output/export-worker-acceptance.json')); assert p['status']=='passed' and p['database_backend']=='postgresql' and p['export_execution']=='worker' and p['attempt_count']==1, p"
+          python -c "import json; p=json.load(open('output/export-worker-acceptance.json')); assert p['status']=='passed' and p['database_backend']=='postgresql' and p['export_execution']=='worker' and p['parallel_job_count']==12 and p['exactly_once_job_count']==12 and p['stale_attempt_count']==2 and p['stale_write_rejected'] is True, p"
       - name: Exercise PostgreSQL backup and restore
         run: |
           docker compose -f deploy/docker-compose.yml exec -T postgres \

@@ -1,7 +1,8 @@
 import json
+from datetime import timedelta
 from time import monotonic, sleep
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from app.core.config import get_settings
 from app.db.database import Database
@@ -11,10 +12,13 @@ from app.db.models import (
     ProcessRevisionRecord,
     ProjectMemberRecord,
     ProjectRecord,
+    utc_now,
 )
 from app.db.repository import BlueprintRepository
 from app.graph.ids import new_id
 from app.models.graph import Edge, GraphDocument, Node, NodeType, SapContext, Swimlane
+
+PARALLEL_JOB_COUNT = 12
 
 
 def main() -> int:
@@ -26,7 +30,9 @@ def main() -> int:
     user_id = "ci-export-worker"
     project_id: str | None = None
     process_id: str | None = None
-    export_id: str | None = None
+    export_ids: list[str] = []
+    stale_export_id: str | None = None
+    stale_claim_token: str | None = None
     try:
         with database.session_factory() as session:
             repository = BlueprintRepository(session)
@@ -56,36 +62,77 @@ def main() -> int:
                 user_id=user_id,
             )
             process_id = process.id
-            job = repository.create_export_job(
+
+            now = utc_now()
+            pending_jobs = [
+                ExportJobRecord(
+                    id=new_id("export"),
+                    process_id=process.id,
+                    revision_no=0,
+                    format="markdown",
+                    status="pending",
+                    created_by=user_id,
+                    created_at=now,
+                )
+                for _ in range(PARALLEL_JOB_COUNT)
+            ]
+            stale_claim_token = new_id("export-claim")
+            stale_job = ExportJobRecord(
+                id=new_id("export"),
                 process_id=process.id,
                 revision_no=0,
                 format="markdown",
-                user_id=user_id,
+                status="running",
+                claim_token=stale_claim_token,
+                attempt_count=1,
+                created_by=user_id,
+                created_at=now,
+                started_at=now - timedelta(minutes=settings.export_stale_minutes + 1),
             )
-            export_id = job.id
+            session.add_all([*pending_jobs, stale_job])
+            session.commit()
+            export_ids = [job.id for job in pending_jobs]
+            stale_export_id = stale_job.id
 
-        deadline = monotonic() + 30
-        final: ExportJobRecord | None = None
-        while monotonic() < deadline:
-            with database.session_factory() as session:
-                final = session.get(ExportJobRecord, export_id)
-                if final is not None and final.status in {"completed", "failed"}:
-                    break
-            sleep(0.25)
+        all_export_ids = [*export_ids, stale_export_id]
+        final = _wait_for_jobs(database, all_export_ids)
+        pending_final = [final[export_id] for export_id in export_ids]
+        stale_final = final[stale_export_id]
 
-        if final is None or final.status != "completed":
-            raise RuntimeError(
-                f"Export worker did not complete the acceptance job: {getattr(final, 'status', None)}"
+        if any(job.status != "completed" for job in final.values()):
+            statuses = {export_id: job.status for export_id, job in final.items()}
+            raise RuntimeError(f"Export workers did not complete all acceptance jobs: {statuses}")
+        if any(job.attempt_count != 1 or job.claim_token is not None for job in pending_final):
+            raise RuntimeError("Parallel export jobs were not completed exactly once")
+        if stale_final.attempt_count != 2 or stale_final.claim_token is not None:
+            raise RuntimeError("Stale export job was not fenced and reclaimed exactly once")
+
+        total_content_length = 0
+        for job in final.values():
+            if job.content is None or job.content_length != len(job.content):
+                raise RuntimeError(f"Export worker produced no durable content for {job.id}")
+            rendered = job.content.decode("utf-8")
+            if "# Export Worker Acceptance" not in rendered or "## 3. 流程步骤" not in rendered:
+                raise RuntimeError(f"Export worker produced unexpected Markdown for {job.id}")
+            total_content_length += job.content_length
+
+        with database.session_factory() as session:
+            repository = BlueprintRepository(session)
+            stale_write_completed = repository.complete_export_job(
+                export_id=stale_export_id,
+                claim_token=stale_claim_token,
+                filename="stale.md",
+                fallback_filename="stale.md",
+                media_type="text/markdown",
+                content=b"stale",
+                retention_hours=settings.export_retention_hours,
             )
-        if final.attempt_count != 1 or final.claim_token is not None:
-            raise RuntimeError(
-                "Export worker acceptance expected one fenced attempt and a released lease"
+            stale_write_failed = repository.fail_export_job(
+                export_id=stale_export_id,
+                claim_token=stale_claim_token,
             )
-        if final.content is None or final.content_length != len(final.content):
-            raise RuntimeError("Export worker acceptance produced no durable content")
-        rendered = final.content.decode("utf-8")
-        if "# Export Worker Acceptance" not in rendered or "## 3. 流程步骤" not in rendered:
-            raise RuntimeError("Export worker acceptance produced unexpected Markdown")
+        if stale_write_completed or stale_write_failed:
+            raise RuntimeError("A stale export lease overwrote the reclaimed worker result")
 
         print(
             json.dumps(
@@ -93,8 +140,13 @@ def main() -> int:
                     "status": "passed",
                     "database_backend": database.engine.url.get_backend_name(),
                     "export_execution": settings.export_execution_mode,
-                    "attempt_count": final.attempt_count,
-                    "content_length": final.content_length,
+                    "parallel_job_count": len(pending_final),
+                    "exactly_once_job_count": sum(
+                        job.attempt_count == 1 for job in pending_final
+                    ),
+                    "stale_attempt_count": stale_final.attempt_count,
+                    "stale_write_rejected": True,
+                    "content_length": total_content_length,
                 },
                 ensure_ascii=False,
             )
@@ -103,8 +155,14 @@ def main() -> int:
     finally:
         if project_id is not None:
             with database.session_factory() as session:
-                if export_id is not None:
-                    session.execute(delete(ExportJobRecord).where(ExportJobRecord.id == export_id))
+                if export_ids or stale_export_id is not None:
+                    session.execute(
+                        delete(ExportJobRecord).where(
+                            ExportJobRecord.id.in_(
+                                [*export_ids, *([stale_export_id] if stale_export_id else [])]
+                            )
+                        )
+                    )
                 if process_id is not None:
                     session.execute(
                         delete(ProcessRevisionRecord).where(
@@ -119,6 +177,32 @@ def main() -> int:
                 )
                 session.execute(delete(ProjectRecord).where(ProjectRecord.id == project_id))
                 session.commit()
+
+
+def _wait_for_jobs(
+    database: Database,
+    export_ids: list[str],
+) -> dict[str, ExportJobRecord]:
+    deadline = monotonic() + 45
+    final: dict[str, ExportJobRecord] = {}
+    while monotonic() < deadline:
+        with database.session_factory() as session:
+            jobs = list(
+                session.scalars(
+                    select(ExportJobRecord).where(ExportJobRecord.id.in_(export_ids))
+                )
+            )
+            final = {job.id: job for job in jobs}
+            if len(final) == len(export_ids) and all(
+                job.status in {"completed", "failed"} for job in final.values()
+            ):
+                return final
+        sleep(0.25)
+    statuses = {
+        export_id: getattr(final.get(export_id), "status", "missing")
+        for export_id in export_ids
+    }
+    raise RuntimeError(f"Timed out waiting for export worker acceptance jobs: {statuses}")
 
 
 if __name__ == "__main__":

@@ -90,9 +90,15 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "p['database_backend']=='postgresql'" in workflow
     assert "p['export_execution']=='worker'" in workflow
     assert "grep -c '^worker$'" in workflow
+    assert "Exercise PostgreSQL multi-worker fencing" in workflow
+    assert "--scale worker=2 worker" in workflow
+    assert "docker inspect --format '{{.State.Health.Status}}'" in workflow
     assert "python -m app.workers.export_worker_acceptance" in workflow
     assert "output/export-worker-acceptance.json" in workflow
-    assert "p['attempt_count']==1" in workflow
+    assert "p['parallel_job_count']==12" in workflow
+    assert "p['exactly_once_job_count']==12" in workflow
+    assert "p['stale_attempt_count']==2" in workflow
+    assert "p['stale_write_rejected'] is True" in workflow
     assert "pg_dump --clean --if-exists --no-owner" in workflow
     assert "sap_blueprint_restore" in workflow
     assert "20260809_0006 (head)" in workflow
