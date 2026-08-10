@@ -269,4 +269,4 @@ Invoke-WebRequest -UseBasicParsing http://localhost:8080/health/ready
 
 ## 当前验收边界
 
-本机没有 Docker CLI，因此 Compose build/up、真实 PostgreSQL、卷归档和恢复尚未完成本机实跑。GitHub Actions 运行 `31377108914` 已通过 API、Web、DOCX 和 deploy 四个作业，确认目标 S3 验收工具提交未破坏既有交付基线；此前运行 `31373701595` 已验证 readiness 的 `tenant_isolation=oidc_claim_allowlist`、`artifact_storage_status=ready`、0009 迁移、两个 Worker 共享文件系统交付物、数据库不保存二进制、12 个任务恰好一次、心跳新鲜任务保留、陈旧租约接管、旧 Token 写回拒绝和 PostgreSQL 备份恢复。本轮新增 Alertmanager 配置与通知演练仍需由下一次 GitHub deploy 作业验证。目标环境还需按本文档执行真实 IdP tenant claim/存量项目映射、企业 Prometheus/Alertmanager 与集中日志平台联调、真实通知路由、真实 S3 写入与非当前版本/恢复验收、导出卷归档恢复、真实长文档滚动中断和容量演练，并归档命令输出、SHA256、readiness 与部署验收报告。
+本机没有 Docker CLI，因此 Compose build/up、真实 PostgreSQL、卷归档和恢复尚未完成本机实跑。GitHub Actions 运行 `31380969503` 已通过 API、Web、DOCX 和 deploy 四个作业，deploy 另行通过 `amtool check-config`、Alertmanager/Prometheus readiness、monitoring profile、合成告警注入和脱敏通知接收，并上传 `deployment-acceptance` 证据包；`31377108914` 和 `31373701595` 分别验证了目标 S3 提交回归和租户/0009/双 Worker/PostgreSQL 备份恢复基线。目标环境还需按本文档执行真实 IdP tenant claim/存量项目映射、企业 Prometheus/Alertmanager 与集中日志平台联调、真实通知路由、真实 S3 写入与非当前版本/恢复验收、导出卷归档恢复、真实长文档滚动中断和容量演练，并归档命令输出、SHA256、readiness 与部署验收报告。

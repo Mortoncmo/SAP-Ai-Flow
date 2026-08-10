@@ -1,6 +1,6 @@
 # SAP Blueprint AI Agent 实施规格
 
-> 文档状态：新版 Markdown 逐章整合、成员变更审计、租户隔离、可观测性与目标 S3 验收基线 4.7
+> 文档状态：新版 Markdown 逐章整合、成员变更审计、租户隔离、Alertmanager 演练与目标 S3 验收基线 4.8
 >
 > 实施状态校准：2026-08-10（以当前代码与自动化测试为准）
 >
@@ -280,6 +280,7 @@
 - GitHub Actions 运行 `31373701595` 对提交 `9520a03` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过。官方 `promtool` 确认 `prometheus.yml` 配置有效且发现 1 个规则文件，`alerts.yml` 的 3 条规则全部有效；API 作业包含新增 `prometheus-client` 的依赖审计，Compose 作业继续通过租户 readiness、0009、双 Worker、文件系统交付物和 PostgreSQL 备份恢复门禁。该 CI 关闭仓库内指标格式、PromQL 语法和配置装配风险，不替代目标 Prometheus/Alertmanager、集中日志保留和通知演练。
 - GitHub Actions 运行 `31374798367` 对提交 `13fe8a8` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过，确认监控验收记录提交未改变 0009、租户隔离、双 Worker、文件系统交付物、PostgreSQL 备份恢复和 DOCX 渲染基线。
 - GitHub Actions 运行 `31377108914` 对提交 `9941087` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过，确认目标 S3 验收工具与文档提交未改变 0009、租户隔离、双 Worker、文件系统交付物、PostgreSQL 备份恢复和 DOCX 渲染基线。
+- GitHub Actions 运行 `31380969503` 对提交 `4e58a8b` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过；deploy 通过 `amtool check-config`、Alertmanager/Prometheus readiness、monitoring profile 和 `SapAiFlowAcceptanceDrill` 回调演练，并上传 `deployment-acceptance` 证据包。该证据证明仓库内通知链路可运行，不替代企业通知渠道、集中日志保留和目标环境演练签字。
 
 ### 3.5 基线迁移原则
 
