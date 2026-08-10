@@ -30,6 +30,7 @@ def test_compose_requires_database_password_and_keeps_api_internal():
     prometheus = compose["services"]["prometheus"]
     alertmanager = compose["services"]["alertmanager"]
     alert_receiver = compose["services"]["alert-drill-receiver"]
+    oidc_mock = compose["services"]["oidc-mock"]
 
     assert "sap_blueprint_dev" not in raw
     assert "EXPORT_ACCEPTANCE_RENDER_DELAY_SECONDS" not in raw
@@ -92,6 +93,11 @@ def test_compose_requires_database_password_and_keeps_api_internal():
     assert "app.monitoring.alert_drill_receiver" in alert_receiver["command"]
     assert "ports" not in alert_receiver
     assert alert_receiver["expose"] == ["8080"]
+    assert oidc_mock["image"] == "ghcr.io/navikt/mock-oauth2-server:6.0.0"
+    assert oidc_mock["profiles"] == ["oidc-acceptance"]
+    assert "interactiveLogin" in oidc_mock["environment"]["JSON_CONFIG"]
+    assert "ci-tenant" in oidc_mock["environment"]["JSON_CONFIG"]
+    assert oidc_mock["ports"] == ["127.0.0.1:${OIDC_MOCK_PORT:-9080}:8080"]
     assert "prometheus-data" in compose["volumes"]
     assert "alertmanager-data" in compose["volumes"]
 
@@ -237,6 +243,14 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "pg_dump --clean --if-exists --no-owner" in workflow
     assert "sap_blueprint_restore" in workflow
     assert "OIDC_ALLOWED_TENANT_IDS: ci-tenant" in workflow
+    assert "COMPOSE_PROFILES: oidc-acceptance" in workflow
+    assert "ghcr.io/navikt/mock-oauth2-server:6.0.0" in (
+        ROOT / "deploy" / "docker-compose.yml"
+    ).read_text(encoding="utf-8")
+    assert "Exercise OIDC authorization code and tenant flow" in workflow
+    assert "oidc_browser_acceptance.js" in workflow
+    assert "output/oidc-acceptance.json" in workflow
+    assert "authorization_code_pkce" in workflow
     assert "EXPORT_STALE_MINUTES: 1" in workflow
     assert "EXPORT_LEASE_HEARTBEAT_SECONDS: 5" in workflow
     assert "20260810_0009 (head)" in workflow

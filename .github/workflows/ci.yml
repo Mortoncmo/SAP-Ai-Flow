@@ -78,18 +78,19 @@ jobs:
       POSTGRES_DB: sap_blueprint
       POSTGRES_USER: sap_blueprint
       POSTGRES_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
-      OIDC_ISSUER: https://ci.invalid
+      COMPOSE_PROFILES: oidc-acceptance
+      OIDC_ISSUER: http://127.0.0.1:9080/ci
       OIDC_AUDIENCE: sap-ai-flow-ci
-      OIDC_JWKS_URL: https://ci.invalid/.well-known/jwks.json
+      OIDC_JWKS_URL: http://oidc-mock:8080/ci/jwks
       OIDC_ALLOWED_TENANT_IDS: ci-tenant
       EXPORT_STALE_MINUTES: 1
       EXPORT_LEASE_HEARTBEAT_SECONDS: 5
-      VITE_OIDC_AUTHORITY: https://ci.invalid
+      VITE_OIDC_AUTHORITY: http://127.0.0.1:9080/ci
       VITE_OIDC_CLIENT_ID: sap-ai-flow-ci-web
-      VITE_OIDC_REDIRECT_URI: http://localhost:8080/auth/callback
-      VITE_OIDC_POST_LOGOUT_REDIRECT_URI: http://localhost:8080/
+      VITE_OIDC_REDIRECT_URI: http://127.0.0.1:8080/auth/callback
+      VITE_OIDC_POST_LOGOUT_REDIRECT_URI: http://127.0.0.1:8080/
       VITE_OIDC_AUDIENCE: sap-ai-flow-ci
-      CORS_ORIGINS: http://localhost:8080
+      CORS_ORIGINS: http://127.0.0.1:8080
     steps:
       - uses: actions/checkout@v5
       - name: Validate Prometheus and Alertmanager configuration
@@ -150,6 +151,13 @@ jobs:
       - name: Start clean Compose stack
         run: |
           docker compose -f deploy/docker-compose.yml up -d
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:9080/isalive > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:9080/isalive > /dev/null
           for attempt in {1..60}; do
             if curl --fail --silent --show-error \
               http://127.0.0.1:8080/health/ready > output/readiness.json; then
@@ -167,6 +175,30 @@ jobs:
           docker compose -f deploy/docker-compose.yml exec -T api alembic current \
             | tee output/alembic-current.txt
           grep -q '20260810_0009 (head)' output/alembic-current.txt
+      - name: Exercise OIDC authorization code and tenant flow
+        run: |
+          set -euo pipefail
+          npx --yes --package @playwright/cli@0.1.18 playwright-cli install-browser chromium
+          session="sap-ai-flow-oidc"
+          cleanup() { npx --yes --package @playwright/cli@0.1.18 playwright-cli --session "$session" close >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          npx --yes --package @playwright/cli@0.1.18 playwright-cli --session "$session" open http://127.0.0.1:8080
+          npx --yes --package @playwright/cli@0.1.18 playwright-cli --session "$session" run-code --filename scripts/oidc_browser_acceptance.js >/tmp/oidc-browser-acceptance.log
+          tenant_id="$(docker compose -f deploy/docker-compose.yml exec -T postgres psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align --command "SELECT tenant_id FROM project WHERE name = 'OIDC CI Acceptance Project';")"
+          test "$tenant_id" = "ci-tenant"
+          python - <<'PY'
+          import json
+          with open("output/oidc-acceptance.json", "w", encoding="utf-8") as handle:
+              json.dump({
+                  "status": "passed",
+                  "authorization_code_pkce": True,
+                  "token_exchange": True,
+                  "protected_api_bearer": True,
+                  "tenant_claim_persisted": True,
+                  "logout": True,
+                  "anonymous_api_rejected": True,
+              }, handle, ensure_ascii=True, indent=2)
+          PY
       - name: Exercise Alertmanager notification routing
         run: |
           docker compose -f deploy/docker-compose.yml --profile monitoring up -d \
@@ -287,6 +319,7 @@ jobs:
           path: |
             output/readiness.json
             output/alembic-current.txt
+            output/oidc-acceptance.json
             output/alertmanager-drill.json
             output/export-worker-acceptance.json
             output/export-worker-interruption.json
