@@ -19,7 +19,7 @@ COPY apps/api/alembic.ini ./alembic.ini
 COPY apps/api/alembic ./alembic
 COPY SAP_Knowledge ./SAP_Knowledge
 
-RUN mkdir -p /app/data/chroma && chown -R app:app /app/data
+RUN mkdir -p /app/data/chroma /app/data/exports && chown -R app:app /app/data
 
 USER app
 EXPOSE 8000
