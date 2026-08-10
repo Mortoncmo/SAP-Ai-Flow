@@ -20,6 +20,7 @@ from app.core.logging import (
     route_template,
     safe_stack,
 )
+from app.core.metrics import observe_request, request_finished, request_started
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -44,43 +45,59 @@ async def request_observability(request: Request, call_next):
     trace_id = request_id(request.headers.get("X-Request-ID"))
     request.state.request_id = trace_id
     started = perf_counter()
+    track_metrics = request.url.path != "/internal/metrics"
+    if track_metrics:
+        request_started()
     try:
-        response = await call_next(request)
-    except Exception as exc:  # pragma: no cover - exercised through integration failures
-        latency_ms = int((perf_counter() - started) * 1000)
+        try:
+            response = await call_next(request)
+        except Exception as exc:  # pragma: no cover - exercised through integration failures
+            latency_ms = int((perf_counter() - started) * 1000)
+            log_event(
+                logging.ERROR,
+                "request.failed",
+                request_id=trace_id,
+                method=request.method,
+                route=route_template(request.scope),
+                status_code=500,
+                latency_ms=latency_ms,
+                exception_type=type(exc).__name__,
+                stack=safe_stack(exc.__traceback__),
+            )
+            response = JSONResponse(
+                status_code=500,
+                content={
+                    "error": {
+                        "code": "INTERNAL_SERVER_ERROR",
+                        "message": "服务处理请求时发生内部错误。",
+                        "request_id": trace_id,
+                        "details": {},
+                    }
+                },
+            )
+        response.headers["X-Request-ID"] = trace_id
+        route = route_template(request.scope)
+        duration_seconds = perf_counter() - started
         log_event(
-            logging.ERROR,
-            "request.failed",
+            logging.INFO,
+            "request.completed",
             request_id=trace_id,
             method=request.method,
-            route=route_template(request.scope),
-            status_code=500,
-            latency_ms=latency_ms,
-            exception_type=type(exc).__name__,
-            stack=safe_stack(exc.__traceback__),
+            route=route,
+            status_code=response.status_code,
+            latency_ms=int(duration_seconds * 1000),
         )
-        response = JSONResponse(
-            status_code=500,
-            content={
-                "error": {
-                    "code": "INTERNAL_SERVER_ERROR",
-                    "message": "服务处理请求时发生内部错误。",
-                    "request_id": trace_id,
-                    "details": {},
-                }
-            },
-        )
-    response.headers["X-Request-ID"] = trace_id
-    log_event(
-        logging.INFO,
-        "request.completed",
-        request_id=trace_id,
-        method=request.method,
-        route=route_template(request.scope),
-        status_code=response.status_code,
-        latency_ms=int((perf_counter() - started) * 1000),
-    )
-    return response
+        if track_metrics:
+            observe_request(
+                method=request.method,
+                route=route,
+                status_code=response.status_code,
+                duration_seconds=duration_seconds,
+            )
+        return response
+    finally:
+        if track_metrics:
+            request_finished()
 
 
 app.add_middleware(

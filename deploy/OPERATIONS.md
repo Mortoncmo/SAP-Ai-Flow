@@ -27,6 +27,16 @@ SELECT tenant_id, COUNT(*) FROM project GROUP BY tenant_id ORDER BY tenant_id;
 
 结果中不得残留 `local`，也不要把 `local` 加入生产 allowlist 绕过映射。随后分别使用两个租户中 subject 相同的测试账号验证：本租户项目可列出，另一租户项目列表不可见且按 ID 访问返回 404。
 
+## 指标与告警
+
+仓库提供 `deploy/monitoring/prometheus.yml` 和 `alerts.yml` 作为监控平台接入基线。Prometheus 必须与 API 位于同一受控网络，抓取 `http://api:8000/internal/metrics`；Nginx 对外访问该路径固定返回 404。开发或演示环境可用以下命令启动本地 Prometheus，生产环境应接入企业现有 Prometheus/Alertmanager，并按平台规则配置保留、通知、静默和升级策略：
+
+```powershell
+docker compose -f .\deploy\docker-compose.yml --profile monitoring up -d prometheus
+```
+
+版本化规则包括 API 不可用、`/api/` 路由 5xx 超过 1%（持续 10 分钟）和 P95 超过 8 秒（持续 10 分钟）。这些规则与第 14.5 节门槛一致，但不替代目标平台的日志集中采集、留存、告警通知演练和运行维护签字。
+
 ## 外部模型调用缓存
 
 项目管理员明确开启外部模型后，持久化流程修改可复用短时间内完全相同的成功 Provider 结果。部署时显式配置：

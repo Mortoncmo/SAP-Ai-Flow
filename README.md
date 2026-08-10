@@ -227,6 +227,8 @@ VITE_OIDC_AUDIENCE=sap-ai-flow
 
 API 为每个响应返回 `X-Request-ID`。客户端提供的请求号只接受 1 至 80 位字母、数字、点、下划线、冒号和连字符，非法值会替换为服务端随机请求号。应用日志采用单行 JSON，只记录请求号、HTTP 方法、路由模板、状态码和耗时；不记录查询字符串、请求头、认证 Token、Cookie、请求正文、完整图、Prompt 或上游异常正文。未处理异常只记录异常类型和不含局部变量的代码位置。
 
+API 同时在容器内提供 `/internal/metrics` Prometheus 端点，指标只使用 HTTP 方法、路由模板和状态码标签，不包含项目 ID、用户、租户、查询参数或业务正文。Nginx 对该路径返回 404；同一 Compose 网络中的 Prometheus 可通过 `deploy/monitoring/prometheus.yml` 抓取。可选监控栈使用 `docker compose -f .\deploy\docker-compose.yml --profile monitoring up -d prometheus` 启动，告警规则覆盖 API 不可用、API 5xx 超过 1% 和 API P95 超过 8 秒。
+
 请求校验错误不会回显 Pydantic 原始 `input` 或 `ctx`。业务 ChangeLog、GAP 评论和外部 Provider 请求继续使用同一套客户、供应商、人员、邮箱、电话、金额和认证秘密脱敏规则。
 
 本地安全检查：

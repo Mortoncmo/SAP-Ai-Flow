@@ -100,6 +100,31 @@ def test_request_log_uses_route_template_without_headers_or_query(app_logs):
     }
 
 
+def test_internal_metrics_use_route_templates_without_resource_ids_or_queries():
+    client = TestClient(app)
+    resource_id = "project_metrics_secret_123"
+    query_secret = "metrics-secret@example.com"
+
+    missing = client.get(
+        f"/api/v1/projects/{resource_id}?email={query_secret}",
+        headers={"X-User-ID": "metrics-user"},
+    )
+    metrics = client.get("/internal/metrics")
+
+    assert missing.status_code == 404
+    assert metrics.status_code == 200
+    assert metrics.headers["content-type"].startswith("text/plain; version=0.0.4")
+    assert "sap_ai_flow_http_requests_total" in metrics.text
+    assert "sap_ai_flow_http_request_duration_seconds_bucket" in metrics.text
+    assert "sap_ai_flow_http_requests_in_progress" in metrics.text
+    assert "sap_ai_flow_http_requests_in_progress 0.0" in metrics.text
+    assert 'route="/api/v1/projects/{project_id}"' in metrics.text
+    assert 'status_code="404"' in metrics.text
+    assert resource_id not in metrics.text
+    assert query_secret not in metrics.text
+    assert "/internal/metrics" not in app.openapi()["paths"]
+
+
 def test_validation_errors_do_not_echo_original_request_input(app_logs):
     client = TestClient(app)
     response = client.post(

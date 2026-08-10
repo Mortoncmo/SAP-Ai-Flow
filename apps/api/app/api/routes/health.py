@@ -4,6 +4,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import Settings, get_settings
+from app.core.metrics import METRICS_CONTENT_TYPE, render_metrics
 from app.db.database import Database, get_database
 from app.documents.artifact_store import ArtifactStorageError, build_artifact_store
 
@@ -13,6 +14,11 @@ router = APIRouter(tags=["health"])
 @router.get("/health/live")
 def live() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/internal/metrics", include_in_schema=False)
+def metrics() -> Response:
+    return Response(content=render_metrics(), media_type=METRICS_CONTENT_TYPE)
 
 
 @router.get("/health/ready")

@@ -27,6 +27,7 @@ def test_compose_requires_database_password_and_keeps_api_internal():
     api = compose["services"]["api"]
     worker = compose["services"]["worker"]
     web = compose["services"]["web"]
+    prometheus = compose["services"]["prometheus"]
 
     assert "sap_blueprint_dev" not in raw
     assert "${POSTGRES_PASSWORD:?" in postgres["environment"]["POSTGRES_PASSWORD"]
@@ -73,6 +74,11 @@ def test_compose_requires_database_password_and_keeps_api_internal():
     assert "export-data:/app/data/exports" in worker["volumes"]
     assert "export-data" in compose["volumes"]
     assert web["depends_on"]["worker"]["condition"] == "service_healthy"
+    assert prometheus["image"] == "prom/prometheus:v3.5.0"
+    assert prometheus["profiles"] == ["monitoring"]
+    assert prometheus["depends_on"]["api"]["condition"] == "service_healthy"
+    assert "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090" in prometheus["ports"]
+    assert "prometheus-data" in compose["volumes"]
 
 
 def test_settings_accept_compose_list_environment_values(monkeypatch):
@@ -143,6 +149,37 @@ def test_api_image_and_nginx_keep_delivery_guards_enabled():
     assert "client_max_body_size 2m" in nginx
     assert "proxy_read_timeout 45s" in nginx
     assert "proxy_connect_timeout 3s" in nginx
+    assert "location = /internal/metrics" in nginx
+    assert "return 404;" in nginx
+
+
+def test_prometheus_scrape_and_alert_rules_are_low_cardinality_and_threshold_aligned():
+    prometheus = yaml.safe_load(
+        (ROOT / "deploy" / "monitoring" / "prometheus.yml").read_text(encoding="utf-8")
+    )
+    alerts = yaml.safe_load(
+        (ROOT / "deploy" / "monitoring" / "alerts.yml").read_text(encoding="utf-8")
+    )
+
+    scrape = prometheus["scrape_configs"][0]
+    assert scrape["job_name"] == "sap-ai-flow-api"
+    assert scrape["metrics_path"] == "/internal/metrics"
+    assert scrape["static_configs"][0]["targets"] == ["api:8000"]
+    rules = {rule["alert"]: rule for group in alerts["groups"] for rule in group["rules"]}
+    assert set(rules) == {
+        "SapAiFlowApiUnavailable",
+        "SapAiFlowApiHighServerErrorRate",
+        "SapAiFlowApiHighP95Latency",
+    }
+    error_expression = rules["SapAiFlowApiHighServerErrorRate"]["expr"]
+    latency_expression = rules["SapAiFlowApiHighP95Latency"]["expr"]
+    assert "sap_ai_flow_http_requests_total" in error_expression
+    assert 'route=~"/api/.*"' in error_expression
+    assert "> 0.01" in error_expression
+    assert "sap_ai_flow_http_request_duration_seconds_bucket" in latency_expression
+    assert "> 8" in latency_expression
+    serialized = (error_expression + latency_expression).lower()
+    assert all(label not in serialized for label in ("project_id", "user_id", "tenant_id"))
 
 
 def test_ci_exercises_compose_postgres_backup_and_restore():
@@ -184,6 +221,10 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "ignore-unfixed: true" in workflow
     assert 'exit-code: "1"' in workflow
     assert "down --volumes --remove-orphans" in workflow
+    assert "Validate Prometheus configuration and alert rules" in workflow
+    assert "promtool" in workflow
+    assert "check config /etc/prometheus/prometheus.yml" in workflow
+    assert "check rules /etc/prometheus/alerts.yml" in workflow
 
 
 def test_ci_renders_docx_with_libreoffice_poppler_and_chinese_fonts():

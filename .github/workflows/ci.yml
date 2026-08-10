@@ -90,6 +90,16 @@ jobs:
       CORS_ORIGINS: http://localhost:8080
     steps:
       - uses: actions/checkout@v5
+      - name: Validate Prometheus configuration and alert rules
+        run: |
+          docker run --rm --entrypoint promtool \
+            --volume "$PWD/deploy/monitoring:/etc/prometheus:ro" \
+            prom/prometheus:v3.5.0 \
+            check config /etc/prometheus/prometheus.yml
+          docker run --rm --entrypoint promtool \
+            --volume "$PWD/deploy/monitoring:/etc/prometheus:ro" \
+            prom/prometheus:v3.5.0 \
+            check rules /etc/prometheus/alerts.yml
       - name: Prepare acceptance output
         run: mkdir -p output
       - name: Build Compose images
