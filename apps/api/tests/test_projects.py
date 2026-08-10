@@ -4,6 +4,8 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
+from threading import Event, Thread
+from time import sleep
 from urllib.parse import unquote
 
 import pytest
@@ -1369,10 +1371,19 @@ def test_export_job_lease_fencing_rejects_stale_worker_writes(persistence_client
 
         claimed_job = repository.require_export_job_unscoped(job.id)
         claimed_job.started_at = datetime.now(UTC) - timedelta(minutes=10)
+        claimed_job.heartbeat_at = datetime.now(UTC) - timedelta(minutes=10)
         session.commit()
         second_claim = repository.claim_export_job(job.id, stale_minutes=5)
         assert second_claim is not None
         assert second_claim != first_claim
+        assert not repository.renew_export_job_lease(
+            export_id=job.id,
+            claim_token=first_claim,
+        )
+        assert repository.renew_export_job_lease(
+            export_id=job.id,
+            claim_token=second_claim,
+        )
 
         assert not repository.complete_export_job(
             export_id=job.id,
@@ -1399,3 +1410,74 @@ def test_export_job_lease_fencing_rejects_stale_worker_writes(persistence_client
         assert completed.attempt_count == 2
         assert completed.claim_token is None
         assert completed.content == b"winner"
+
+
+def test_long_export_heartbeat_prevents_false_stale_reclaim(
+    persistence_client,
+    monkeypatch,
+):
+    client, database = persistence_client
+    process_id = _create_process(client)
+    with database.session_factory() as session:
+        repository = BlueprintRepository(session)
+        job = repository.create_export_job(
+            process_id=process_id,
+            revision_no=0,
+            format="markdown",
+            user_id="local-user",
+        )
+        export_id = job.id
+
+    render_started = Event()
+    release_render = Event()
+    original_render_export = export_service.render_export
+
+    def slow_render_export(model, format):
+        render_started.set()
+        if not release_render.wait(timeout=2):
+            raise RuntimeError("test did not release long export render")
+        return original_render_export(model, format)
+
+    monkeypatch.setattr(export_service, "render_export", slow_render_export)
+    outcome: dict[str, object] = {}
+
+    def run_export() -> None:
+        try:
+            outcome["claimed"] = export_service.process_export_job(
+                export_id,
+                database.engine,
+                retention_hours=24,
+                stale_minutes=0.001,
+                heartbeat_seconds=0.01,
+            )
+        except BaseException as exc:
+            outcome["error"] = exc
+
+    thread = Thread(target=run_export, daemon=True)
+    thread.start()
+    assert render_started.wait(timeout=2)
+    try:
+        sleep(0.1)
+        with database.session_factory() as session:
+            repository = BlueprintRepository(session)
+            running = repository.require_export_job_unscoped(export_id)
+            assert running.status == "running"
+            assert running.heartbeat_at is not None
+            assert running.started_at is not None
+            assert running.heartbeat_at > running.started_at
+            assert export_id not in repository.list_export_job_candidates(
+                stale_minutes=0.001,
+                limit=10,
+            )
+            assert repository.claim_export_job(export_id, stale_minutes=0.001) is None
+    finally:
+        release_render.set()
+        thread.join(timeout=3)
+
+    assert not thread.is_alive()
+    assert "error" not in outcome
+    assert outcome["claimed"] is True
+    with database.session_factory() as session:
+        completed = BlueprintRepository(session).require_export_job_unscoped(export_id)
+        assert completed.status == "completed"
+        assert completed.attempt_count == 1

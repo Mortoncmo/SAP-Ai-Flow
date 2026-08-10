@@ -1,6 +1,7 @@
 import logging
 import re
 from datetime import UTC, datetime
+from threading import Event, Thread
 
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session
@@ -11,6 +12,71 @@ from app.db.models import ProcessRecord, ProcessRevisionRecord, ProjectRecord
 from app.db.repository import BlueprintRepository
 from app.documents.blueprint import BlueprintDocumentModel, render_docx, render_markdown
 from app.models.graph import GraphDocument
+
+
+class ExportLeaseHeartbeat:
+    def __init__(
+        self,
+        *,
+        export_id: str,
+        claim_token: str,
+        bind: Engine | Connection,
+        interval_seconds: float,
+    ) -> None:
+        self.export_id = export_id
+        self.claim_token = claim_token
+        self.bind = bind.engine if isinstance(bind, Connection) else bind
+        self.interval_seconds = interval_seconds
+        self._stop = Event()
+        self._lease_lost = Event()
+        self._thread = Thread(
+            target=self._run,
+            name=f"export-heartbeat-{export_id[-12:]}",
+            daemon=True,
+        )
+
+    @property
+    def lease_lost(self) -> bool:
+        return self._lease_lost.is_set()
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=min(self.interval_seconds + 1, 5))
+        if self._thread.is_alive():
+            log_event(
+                logging.WARNING,
+                "export_job.heartbeat_stop_timeout",
+                export_id=self.export_id,
+            )
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval_seconds):
+            try:
+                with Session(bind=self.bind, expire_on_commit=False) as session:
+                    renewed = BlueprintRepository(session).renew_export_job_lease(
+                        export_id=self.export_id,
+                        claim_token=self.claim_token,
+                    )
+            except Exception as exc:
+                log_event(
+                    logging.ERROR,
+                    "export_job.heartbeat_failed",
+                    export_id=self.export_id,
+                    exception_type=type(exc).__name__,
+                    stack=safe_stack(exc.__traceback__),
+                )
+                continue
+            if not renewed:
+                self._lease_lost.set()
+                log_event(
+                    logging.WARNING,
+                    "export_job.heartbeat_lease_lost",
+                    export_id=self.export_id,
+                )
+                return
 
 
 def blueprint_document(
@@ -66,6 +132,7 @@ def process_export_job(
     *,
     retention_hours: int,
     stale_minutes: int,
+    heartbeat_seconds: float,
 ) -> bool:
     claim_token: str | None = None
     attempt_count: int | None = None
@@ -87,7 +154,18 @@ def process_export_job(
             project = repository.require_project(process.project_id)
             revision = repository.require_revision(process.id, job.revision_no)
             model = blueprint_document(project, process, revision)
-            content, media_type, extension = render_export(model, job.format)
+            session.commit()
+            heartbeat = ExportLeaseHeartbeat(
+                export_id=export_id,
+                claim_token=claim_token,
+                bind=bind,
+                interval_seconds=heartbeat_seconds,
+            )
+            heartbeat.start()
+            try:
+                content, media_type, extension = render_export(model, job.format)
+            finally:
+                heartbeat.stop()
             unicode_filename, fallback_filename = export_filenames(
                 process_name=process.name,
                 process_id=process.id,
@@ -109,6 +187,7 @@ def process_export_job(
                 "export_job.completed" if completed else "export_job.lease_lost",
                 export_id=export_id,
                 attempt_count=attempt_count,
+                heartbeat_lease_lost=heartbeat.lease_lost,
             )
         except Exception as exc:
             session.rollback()

@@ -1,7 +1,7 @@
 from functools import lru_cache
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     export_execution_mode: Literal["inline", "worker"] = "inline"
     export_worker_poll_seconds: float = Field(default=1.0, ge=0.1, le=60)
     export_worker_batch_size: int = Field(default=8, ge=1, le=100)
+    export_lease_heartbeat_seconds: float = Field(default=30.0, ge=0.1, le=60)
     database_url: str = "sqlite:///../../output/sap_blueprint.db"
     database_auto_create: bool = True
     knowledge_root: str = ""
@@ -77,6 +78,16 @@ class Settings(BaseSettings):
         if normalized not in {"local", "deepseek"}:
             raise ValueError("AGENT_PROVIDER must be 'local' or 'deepseek'")
         return normalized
+
+    @model_validator(mode="after")
+    def validate_export_lease_window(self) -> Self:
+        stale_seconds = self.export_stale_minutes * 60
+        if self.export_lease_heartbeat_seconds * 3 > stale_seconds:
+            raise ValueError(
+                "EXPORT_LEASE_HEARTBEAT_SECONDS must not exceed one third of "
+                "EXPORT_STALE_MINUTES"
+            )
+        return self
 
     @property
     def oidc_configured(self) -> bool:

@@ -88,6 +88,7 @@ LLM_CACHE_TTL_SECONDS=60
 LLM_CACHE_MAX_ENTRIES=128
 EXPORT_RETENTION_HOURS=24
 EXPORT_STALE_MINUTES=5
+EXPORT_LEASE_HEARTBEAT_SECONDS=30
 EXPORT_EXECUTION_MODE=inline
 EXPORT_WORKER_POLL_SECONDS=1
 EXPORT_WORKER_BATCH_SIZE=8
@@ -105,9 +106,9 @@ DeepSeek 单次请求默认 10 秒，最多重试 2 次，但整个 Provider 调
 
 当前缓存只存在于单个 API 进程内，进程重启会清空，多实例之间不共享。它用于减少短时间重复请求，不替代真实外部模型/PostgreSQL 的并发、长尾、命中率和容量验收；生产运维边界见 [deploy/OPERATIONS.md](deploy/OPERATIONS.md)。
 
-Markdown/Word 下载默认先创建持久化导出任务，再每 250 毫秒查询 `export_id`，完成后下载。任务覆盖 `pending`、`running`、`completed`、`failed`、`expired` 状态，并返回 `attempt_count`；文件默认保留 24 小时，运行超过 5 分钟的任务允许恢复执行。同步导出 API 仍保留兼容，但 Web 不再使用。
+Markdown/Word 下载默认先创建持久化导出任务，再每 250 毫秒查询 `export_id`，完成后下载。任务覆盖 `pending`、`running`、`completed`、`failed`、`expired` 状态，并返回 `attempt_count`；文件默认保留 24 小时。运行中的 Worker 按 `EXPORT_LEASE_HEARTBEAT_SECONDS` 续租，只有心跳超过 `EXPORT_STALE_MINUTES` 才允许恢复执行；没有心跳的中断任务可被接管。同步导出 API 仍保留兼容，但 Web 不再使用。
 
-开发环境默认 `EXPORT_EXECUTION_MODE=inline`，便于用 SQLite 单进程运行；生产 Compose 固定使用独立 Worker，API 只创建和查询任务。Worker 使用 PostgreSQL 原子领取、租约 Token 栅栏和尝试次数防止陈旧实例覆盖接管后的结果。CI 已用两个健康 Worker 验证 12 个普通任务恰好执行一次、陈旧任务只接管一次且旧 Token 写回被拒绝。文件仍暂存在应用数据库，不能作为永久文档库；真实长文档容量、滚动中断及受控对象存储仍需目标环境验收，详见 [deploy/OPERATIONS.md](deploy/OPERATIONS.md)。
+开发环境默认 `EXPORT_EXECUTION_MODE=inline`，便于用 SQLite 单进程运行；生产 Compose 固定使用独立 Worker，API 只创建和查询任务。Worker 使用 PostgreSQL 原子领取、心跳续租、租约 Token 栅栏和尝试次数，既避免正常长文档被误接管，也防止陈旧实例覆盖接管后的结果。本轮 CI 将用两个健康 Worker 验证 12 个普通任务恰好执行一次、陈旧任务只接管一次、心跳新鲜任务不被接管且旧 Token 写回被拒绝。文件仍暂存在应用数据库，不能作为永久文档库；真实长文档容量、滚动中断及受控对象存储仍需目标环境验收，详见 [deploy/OPERATIONS.md](deploy/OPERATIONS.md)。
 
 未配置时保持 `AGENT_PROVIDER=local`。本地规则引擎支持以下演示指令：
 

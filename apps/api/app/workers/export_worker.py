@@ -34,6 +34,7 @@ class ExportJobWorker:
                 self.database.engine,
                 retention_hours=self.settings.export_retention_hours,
                 stale_minutes=self.settings.export_stale_minutes,
+                heartbeat_seconds=self.settings.export_lease_heartbeat_seconds,
             ):
                 claimed += 1
         return claimed
@@ -44,6 +45,7 @@ class ExportJobWorker:
             "export_worker.started",
             poll_seconds=self.settings.export_worker_poll_seconds,
             batch_size=self.settings.export_worker_batch_size,
+            heartbeat_seconds=self.settings.export_lease_heartbeat_seconds,
         )
         while not stop_event.is_set():
             claimed = self.run_once()

@@ -1,6 +1,8 @@
 from pathlib import Path
 
+import pytest
 import yaml
+from pydantic import ValidationError
 
 from app.core.config import Settings
 
@@ -31,6 +33,9 @@ def test_compose_requires_database_password_and_keeps_api_internal():
     assert "${POSTGRES_PASSWORD:?" in api["environment"]["DATABASE_URL"]
     assert api["environment"]["EXPORT_RETENTION_HOURS"] == "${EXPORT_RETENTION_HOURS:-24}"
     assert api["environment"]["EXPORT_STALE_MINUTES"] == "${EXPORT_STALE_MINUTES:-5}"
+    assert api["environment"]["EXPORT_LEASE_HEARTBEAT_SECONDS"] == (
+        "${EXPORT_LEASE_HEARTBEAT_SECONDS:-30}"
+    )
     assert api["environment"]["EXPORT_EXECUTION_MODE"] == "worker"
     assert api["environment"]["LLM_CACHE_TTL_SECONDS"] == "${LLM_CACHE_TTL_SECONDS:-60}"
     assert api["environment"]["LLM_CACHE_MAX_ENTRIES"] == "${LLM_CACHE_MAX_ENTRIES:-128}"
@@ -45,6 +50,9 @@ def test_compose_requires_database_password_and_keeps_api_internal():
     assert worker["environment"]["EXPORT_EXECUTION_MODE"] == "worker"
     assert worker["environment"]["EXPORT_WORKER_POLL_SECONDS"] == "${EXPORT_WORKER_POLL_SECONDS:-1}"
     assert worker["environment"]["EXPORT_WORKER_BATCH_SIZE"] == "${EXPORT_WORKER_BATCH_SIZE:-8}"
+    assert worker["environment"]["EXPORT_LEASE_HEARTBEAT_SECONDS"] == (
+        "${EXPORT_LEASE_HEARTBEAT_SECONDS:-30}"
+    )
     assert worker["environment"]["DATABASE_AUTO_CREATE"] == "false"
     assert worker["depends_on"]["api"]["condition"] == "service_healthy"
     assert worker["healthcheck"]["test"][-1] == "--healthcheck"
@@ -59,6 +67,15 @@ def test_settings_accept_compose_list_environment_values(monkeypatch):
 
     assert settings.oidc_algorithms == ["RS256", "ES256"]
     assert settings.cors_origins == ["http://localhost:8080", "https://flow.example.com"]
+
+
+def test_settings_reject_heartbeat_interval_that_cannot_safely_renew_lease():
+    with pytest.raises(ValidationError, match="EXPORT_LEASE_HEARTBEAT_SECONDS"):
+        Settings(
+            _env_file=None,
+            export_stale_minutes=1,
+            export_lease_heartbeat_seconds=21,
+        )
 
 
 def test_browser_smoke_passes_cors_origin_in_supported_format():
@@ -99,10 +116,11 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "p['exactly_once_job_count']==12" in workflow
     assert "p['stale_attempt_count']==2" in workflow
     assert "p['stale_write_rejected'] is True" in workflow
+    assert "p['fresh_heartbeat_preserved'] is True" in workflow
     assert "pg_dump --clean --if-exists --no-owner" in workflow
     assert "sap_blueprint_restore" in workflow
-    assert "20260809_0006 (head)" in workflow
-    assert 'test "$restored_head" = "20260809_0006"' in workflow
+    assert "20260809_0007 (head)" in workflow
+    assert 'test "$restored_head" = "20260809_0007"' in workflow
     assert workflow.count("aquasecurity/trivy-action@v0.36.0") == 4
     assert "output/sap-ai-flow-api.cdx.json" in workflow
     assert "output/sap-ai-flow-web.cdx.json" in workflow

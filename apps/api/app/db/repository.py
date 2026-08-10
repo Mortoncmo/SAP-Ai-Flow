@@ -683,6 +683,11 @@ class BlueprintRepository:
 
     def list_export_job_candidates(self, *, stale_minutes: int, limit: int) -> list[str]:
         stale_before = utc_now() - timedelta(minutes=stale_minutes)
+        lease_activity = func.coalesce(
+            ExportJobRecord.heartbeat_at,
+            ExportJobRecord.started_at,
+            ExportJobRecord.created_at,
+        )
         return list(
             self.session.scalars(
                 select(ExportJobRecord.id)
@@ -691,7 +696,7 @@ class BlueprintRepository:
                         ExportJobRecord.status == "pending",
                         and_(
                             ExportJobRecord.status == "running",
-                            ExportJobRecord.started_at < stale_before,
+                            lease_activity < stale_before,
                         ),
                     )
                 )
@@ -703,6 +708,11 @@ class BlueprintRepository:
     def claim_export_job(self, export_id: str, *, stale_minutes: int) -> str | None:
         now = utc_now()
         stale_before = now - timedelta(minutes=stale_minutes)
+        lease_activity = func.coalesce(
+            ExportJobRecord.heartbeat_at,
+            ExportJobRecord.started_at,
+            ExportJobRecord.created_at,
+        )
         claim_token = new_id("export-claim")
         result = self.session.execute(
             update(ExportJobRecord)
@@ -712,7 +722,7 @@ class BlueprintRepository:
                     ExportJobRecord.status == "pending",
                     and_(
                         ExportJobRecord.status == "running",
-                        ExportJobRecord.started_at < stale_before,
+                        lease_activity < stale_before,
                     ),
                 ),
             )
@@ -721,6 +731,7 @@ class BlueprintRepository:
                 claim_token=claim_token,
                 attempt_count=ExportJobRecord.attempt_count + 1,
                 started_at=now,
+                heartbeat_at=now,
                 completed_at=None,
                 expires_at=None,
                 error_code=None,
@@ -729,6 +740,19 @@ class BlueprintRepository:
         )
         self._commit()
         return claim_token if result.rowcount else None
+
+    def renew_export_job_lease(self, *, export_id: str, claim_token: str) -> bool:
+        result = self.session.execute(
+            update(ExportJobRecord)
+            .where(
+                ExportJobRecord.id == export_id,
+                ExportJobRecord.status == "running",
+                ExportJobRecord.claim_token == claim_token,
+            )
+            .values(heartbeat_at=utc_now())
+        )
+        self._commit()
+        return bool(result.rowcount)
 
     def expire_export_jobs(self) -> None:
         self.session.execute(

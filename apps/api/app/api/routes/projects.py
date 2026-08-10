@@ -583,6 +583,7 @@ def create_export_job(
             repository.session.get_bind(),
             retention_hours=settings.export_retention_hours,
             stale_minutes=settings.export_stale_minutes,
+            heartbeat_seconds=settings.export_lease_heartbeat_seconds,
         )
     return _export_job_response(job)
 
@@ -608,6 +609,7 @@ def get_export_job(
             repository.session.get_bind(),
             retention_hours=settings.export_retention_hours,
             stale_minutes=settings.export_stale_minutes,
+            heartbeat_seconds=settings.export_lease_heartbeat_seconds,
         )
     return _export_job_response(job)
 

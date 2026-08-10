@@ -56,10 +56,26 @@ class Database:
                         "INTEGER NOT NULL DEFAULT 0"
                     )
                 )
+            if "heartbeat_at" not in export_columns:
+                connection.execute(
+                    text("ALTER TABLE export_job ADD COLUMN heartbeat_at DATETIME")
+                )
+                connection.execute(
+                    text(
+                        "UPDATE export_job SET heartbeat_at = started_at "
+                        "WHERE status = 'running' AND heartbeat_at IS NULL"
+                    )
+                )
             connection.execute(
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_export_job_status_created_at "
                     "ON export_job (status, created_at)"
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_export_job_status_heartbeat_at "
+                    "ON export_job (status, heartbeat_at)"
                 )
             )
 
