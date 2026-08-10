@@ -257,4 +257,4 @@ Invoke-WebRequest -UseBasicParsing http://localhost:8080/health/ready
 
 ## 当前验收边界
 
-本机没有 Docker CLI，因此 Compose build/up、真实 PostgreSQL、卷归档和恢复尚未完成本机实跑。GitHub Actions 运行 `31369547593` 已验证 readiness 的 `tenant_isolation=oidc_claim_allowlist`、`artifact_storage_status=ready`、0009 迁移、两个 Worker 共享文件系统交付物、数据库不保存二进制、12 个任务恰好一次、心跳新鲜任务保留、陈旧租约接管、旧 Token 写回拒绝和 PostgreSQL 备份恢复。目标环境仍需按本文档执行真实 IdP tenant claim/存量项目映射、导出卷/S3 归档恢复、真实长文档滚动中断和容量演练，并归档命令输出、SHA256、readiness 与导出验收结果。
+本机没有 Docker CLI，因此 Compose build/up、真实 PostgreSQL、卷归档和恢复尚未完成本机实跑。GitHub Actions 运行 `31373701595` 已验证 Prometheus 配置和 3 条告警规则、readiness 的 `tenant_isolation=oidc_claim_allowlist`、`artifact_storage_status=ready`、0009 迁移、两个 Worker 共享文件系统交付物、数据库不保存二进制、12 个任务恰好一次、心跳新鲜任务保留、陈旧租约接管、旧 Token 写回拒绝和 PostgreSQL 备份恢复。目标环境仍需按本文档执行真实 IdP tenant claim/存量项目映射、Prometheus/Alertmanager 与集中日志平台联调、导出卷/S3 归档恢复、真实长文档滚动中断和容量演练，并归档命令输出、SHA256、readiness 与导出验收结果。
