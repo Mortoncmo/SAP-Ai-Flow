@@ -27,7 +27,7 @@ SAP AI Flow 是一个面向 SAP 业务流程建模的对话式流程图工具。
 - 可配置的 API 容量测试脚本，按并发级别输出错误率、P50/P95/P99、模型调用数、缓存状态和数据库后端证据。
 - Docker Compose 和 GitHub Actions 基线。
 
-完整范围、协议和 12 周实施计划见 [IMPLEMENTATION.md](./IMPLEMENTATION.md)。
+用户操作步骤见 [USER_MANUAL.md](./USER_MANUAL.md)，完整范围、协议和 12 周实施计划见 [IMPLEMENTATION.md](./IMPLEMENTATION.md)，生产部署与维护见 [deploy/OPERATIONS.md](deploy/OPERATIONS.md)。
 
 ## 技术栈
 
