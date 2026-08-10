@@ -641,7 +641,6 @@ class BlueprintRepository:
         format: str,
         user_id: str,
     ) -> ExportJobRecord:
-        self.expire_export_jobs()
         job = ExportJobRecord(
             id=new_id("export"),
             process_id=process_id,
@@ -765,6 +764,37 @@ class BlueprintRepository:
         )
         self._commit()
 
+    def list_expired_export_artifacts(self, *, limit: int = 100) -> list[ExportJobRecord]:
+        return list(
+            self.session.scalars(
+                select(ExportJobRecord)
+                .where(
+                    ExportJobRecord.status == "expired",
+                    or_(
+                        ExportJobRecord.content.is_not(None),
+                        ExportJobRecord.artifact_key.is_not(None),
+                    ),
+                )
+                .order_by(ExportJobRecord.expires_at, ExportJobRecord.id)
+                .limit(limit)
+            )
+        )
+
+    def clear_export_artifact(self, export_id: str) -> bool:
+        result = self.session.execute(
+            update(ExportJobRecord)
+            .where(ExportJobRecord.id == export_id)
+            .values(
+                content=None,
+                content_length=None,
+                artifact_backend=None,
+                artifact_key=None,
+                content_sha256=None,
+            )
+        )
+        self._commit()
+        return bool(result.rowcount)
+
     def complete_export_job(
         self,
         *,
@@ -773,8 +803,12 @@ class BlueprintRepository:
         filename: str,
         fallback_filename: str,
         media_type: str,
-        content: bytes,
+        content: bytes | None,
         retention_hours: int,
+        artifact_backend: str = "database",
+        artifact_key: str | None = None,
+        content_sha256: str | None = None,
+        content_length: int | None = None,
     ) -> bool:
         completed_at = utc_now()
         result = self.session.execute(
@@ -791,7 +825,10 @@ class BlueprintRepository:
                 fallback_filename=fallback_filename,
                 media_type=media_type,
                 content=content,
-                content_length=len(content),
+                content_length=len(content) if content is not None else content_length,
+                artifact_backend=artifact_backend,
+                artifact_key=artifact_key,
+                content_sha256=content_sha256,
                 error_code=None,
                 error_message=None,
                 completed_at=completed_at,
@@ -814,6 +851,9 @@ class BlueprintRepository:
                 claim_token=None,
                 content=None,
                 content_length=None,
+                artifact_backend=None,
+                artifact_key=None,
+                content_sha256=None,
                 error_code="EXPORT_RENDER_FAILED",
                 error_message="蓝图渲染失败，请稍后重试。",
                 completed_at=utc_now(),

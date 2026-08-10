@@ -36,6 +36,13 @@ def test_compose_requires_database_password_and_keeps_api_internal():
     assert api["environment"]["EXPORT_LEASE_HEARTBEAT_SECONDS"] == (
         "${EXPORT_LEASE_HEARTBEAT_SECONDS:-30}"
     )
+    assert api["environment"]["EXPORT_STORAGE_BACKEND"] == (
+        "${EXPORT_STORAGE_BACKEND:-filesystem}"
+    )
+    assert api["environment"]["EXPORT_STORAGE_PATH"] == "/app/data/exports"
+    assert api["environment"]["EXPORT_S3_SECRET_ACCESS_KEY"] == (
+        "${EXPORT_S3_SECRET_ACCESS_KEY:-}"
+    )
     assert api["environment"]["EXPORT_EXECUTION_MODE"] == "worker"
     assert api["environment"]["LLM_CACHE_TTL_SECONDS"] == "${LLM_CACHE_TTL_SECONDS:-60}"
     assert api["environment"]["LLM_CACHE_MAX_ENTRIES"] == "${LLM_CACHE_MAX_ENTRIES:-128}"
@@ -53,9 +60,16 @@ def test_compose_requires_database_password_and_keeps_api_internal():
     assert worker["environment"]["EXPORT_LEASE_HEARTBEAT_SECONDS"] == (
         "${EXPORT_LEASE_HEARTBEAT_SECONDS:-30}"
     )
+    assert worker["environment"]["EXPORT_STORAGE_BACKEND"] == (
+        "${EXPORT_STORAGE_BACKEND:-filesystem}"
+    )
+    assert worker["environment"]["EXPORT_STORAGE_PATH"] == "/app/data/exports"
     assert worker["environment"]["DATABASE_AUTO_CREATE"] == "false"
     assert worker["depends_on"]["api"]["condition"] == "service_healthy"
     assert worker["healthcheck"]["test"][-1] == "--healthcheck"
+    assert "export-data:/app/data/exports" in api["volumes"]
+    assert "export-data:/app/data/exports" in worker["volumes"]
+    assert "export-data" in compose["volumes"]
     assert web["depends_on"]["worker"]["condition"] == "service_healthy"
 
 
@@ -76,6 +90,28 @@ def test_settings_reject_heartbeat_interval_that_cannot_safely_renew_lease():
             export_stale_minutes=1,
             export_lease_heartbeat_seconds=21,
         )
+
+
+def test_settings_require_complete_s3_credentials_and_safe_prefix():
+    with pytest.raises(ValidationError, match="must be set together"):
+        Settings(_env_file=None, export_s3_access_key_id="access-only")
+    with pytest.raises(ValidationError, match="relative object prefix"):
+        Settings(_env_file=None, export_s3_prefix="../escape")
+
+    production_database = Settings(
+        _env_file=None,
+        app_env="production",
+        export_execution_mode="worker",
+    )
+    assert not production_database.export_storage_configured
+    production_s3 = Settings(
+        _env_file=None,
+        app_env="production",
+        export_execution_mode="worker",
+        export_storage_backend="s3",
+        export_s3_bucket="blueprints",
+    )
+    assert production_s3.export_storage_configured
 
 
 def test_browser_smoke_passes_cors_origin_in_supported_format():
@@ -106,6 +142,8 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "http://127.0.0.1:8080/health/ready" in workflow
     assert "p['database_backend']=='postgresql'" in workflow
     assert "p['export_execution']=='worker'" in workflow
+    assert "p['artifact_storage']=='filesystem'" in workflow
+    assert "p['artifact_storage_status']=='ready'" in workflow
     assert "grep -c '^worker$'" in workflow
     assert "Exercise PostgreSQL multi-worker fencing" in workflow
     assert "--scale worker=2 worker" in workflow
@@ -117,10 +155,11 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "p['stale_attempt_count']==2" in workflow
     assert "p['stale_write_rejected'] is True" in workflow
     assert "p['fresh_heartbeat_preserved'] is True" in workflow
+    assert "p['database_content_empty'] is True" in workflow
     assert "pg_dump --clean --if-exists --no-owner" in workflow
     assert "sap_blueprint_restore" in workflow
-    assert "20260809_0007 (head)" in workflow
-    assert 'test "$restored_head" = "20260809_0007"' in workflow
+    assert "20260810_0008 (head)" in workflow
+    assert 'test "$restored_head" = "20260810_0008"' in workflow
     assert workflow.count("aquasecurity/trivy-action@v0.36.0") == 4
     assert "output/sap-ai-flow-api.cdx.json" in workflow
     assert "output/sap-ai-flow-web.cdx.json" in workflow

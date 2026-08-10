@@ -66,6 +66,24 @@ class Database:
                         "WHERE status = 'running' AND heartbeat_at IS NULL"
                     )
                 )
+            if "artifact_backend" not in export_columns:
+                connection.execute(
+                    text("ALTER TABLE export_job ADD COLUMN artifact_backend VARCHAR(20)")
+                )
+                connection.execute(
+                    text(
+                        "UPDATE export_job SET artifact_backend = 'database' "
+                        "WHERE status = 'completed' AND content IS NOT NULL"
+                    )
+                )
+            if "artifact_key" not in export_columns:
+                connection.execute(
+                    text("ALTER TABLE export_job ADD COLUMN artifact_key VARCHAR(512)")
+                )
+            if "content_sha256" not in export_columns:
+                connection.execute(
+                    text("ALTER TABLE export_job ADD COLUMN content_sha256 VARCHAR(64)")
+                )
             connection.execute(
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_export_job_status_created_at "
@@ -76,6 +94,12 @@ class Database:
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_export_job_status_heartbeat_at "
                     "ON export_job (status, heartbeat_at)"
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_export_job_status_expires_at "
+                    "ON export_job (status, expires_at)"
                 )
             )
 

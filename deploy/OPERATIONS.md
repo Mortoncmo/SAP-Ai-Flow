@@ -13,7 +13,7 @@ docker compose -f .\deploy\docker-compose.yml up -d api worker web
 Invoke-WebRequest http://localhost:8080/health/ready
 ```
 
-通过 Web 入口访问 `/health/ready`；它会检查认证/Provider/导出执行模式并实际执行数据库连接查询。只有返回 `200`、`status=ok`、`database=ready` 且 `export_execution=worker` 后才允许写入项目。再运行 `docker compose -f .\deploy\docker-compose.yml ps`，确认 PostgreSQL、API、Worker 和 Web 都为健康状态。API 的 8000 端口仅在 Compose 网络内暴露，不应绕过 Nginx 直接发布到宿主机或外部负载均衡器。
+通过 Web 入口访问 `/health/ready`；它会检查认证/Provider/导出执行模式、数据库连接和交付物存储可用性。只有返回 `200`、`status=ok`、`database=ready`、`artifact_storage_status=ready` 且 `export_execution=worker` 后才允许写入项目。生产环境 `EXPORT_STORAGE_BACKEND=database` 会被 readiness 拒绝。再运行 `docker compose -f .\deploy\docker-compose.yml ps`，确认 PostgreSQL、API、Worker 和 Web 都为健康状态。API 的 8000 端口仅在 Compose 网络内暴露，不应绕过 Nginx 直接发布到宿主机或外部负载均衡器。
 
 ## 外部模型调用缓存
 
@@ -65,17 +65,48 @@ EXPORT_LEASE_HEARTBEAT_SECONDS=30
 EXPORT_EXECUTION_MODE=worker
 EXPORT_WORKER_POLL_SECONDS=1
 EXPORT_WORKER_BATCH_SIZE=8
+EXPORT_STORAGE_BACKEND=filesystem
+EXPORT_STORAGE_PATH=/app/data/exports
+EXPORT_S3_BUCKET=
+EXPORT_S3_PREFIX=sap-blueprint-exports
+EXPORT_S3_REGION=
+EXPORT_S3_ENDPOINT_URL=
+EXPORT_S3_ACCESS_KEY_ID=
+EXPORT_S3_SECRET_ACCESS_KEY=
 ```
 
 - Web 创建任务后轮询 `pending | running`，仅在 `completed` 时下载；`failed` 和 `expired` 必须重新创建任务。
 - 生产 API 只创建和查询任务，不执行文档渲染；独立 Worker 轮询 `pending` 和超过陈旧阈值的 `running` 任务。非开发环境配置为 `inline` 时 readiness 返回 503。
 - Worker 领取任务时原子生成 `claim_token`、递增 `attempt_count` 并写入 `heartbeat_at`。渲染期间由独立数据库会话按心跳间隔续租；心跳间隔必须不超过陈旧窗口的三分之一。完成或失败写回必须匹配当前 Token；旧 Worker 被新实例接管后不能覆盖新结果。
 - 陈旧判定优先使用 `heartbeat_at`，兼容迁移前只有 `started_at` 的运行任务。只有心跳和开始时间都超过陈旧窗口才允许重新领取，正常长文档不会因渲染时间超过五分钟而重复执行。
-- Worker 每轮都会把到期任务转为 `expired` 并清空二进制内容。低流量实例也会按轮询周期清理，但仍必须监控 `export_job` 表容量、失败率、陈旧接管次数和平均渲染时长。
+- Worker 每轮都会把到期任务转为 `expired`。数据库后端会清空 `content`；文件系统/S3 后端先删除对象，再清空 `artifact_key`、SHA-256 和长度元数据。对象删除失败时保留引用并在下一轮重试，任务状态仍保持 `expired`，不会重新开放下载。低流量实例也会按轮询周期清理，但仍必须监控 `export_job` 表容量、存储容量、失败率、陈旧接管次数、对象删除失败次数和平均渲染时长。
 - 可以启动多个 Worker；目标业务负载下的并发吞吐、进程滚动重启、五分钟以上长文档和批量上限仍必须在目标 PostgreSQL 环境验证后才能确定实例数、轮询周期和陈旧阈值。
 - GitHub Compose 基线已扩容到两个健康 Worker，并以 12 个普通任务验证 `attempt_count=1`，以 1 个预置陈旧任务验证 `attempt_count=2` 和旧 Token 写回拒绝，再以开始时间已旧但心跳新鲜的任务验证不会被接管。该门禁证明租约正确性，不替代目标工作负载的吞吐量和长文档中断恢复结论。
 - Worker 结构化日志只允许记录 `export_id`、尝试次数、结果和异常类型，不得记录蓝图正文、Prompt、认证信息或客户业务数据。
-- 应用数据库只保存短期下载内容，不是永久文档库。正式蓝图下载后必须转存到有权限、保留期和备份策略的受控文档库。
+- 开发环境可用 `database` 后端将短期二进制保存在 SQLite/PostgreSQL；生产环境必须使用 `filesystem` 或 `s3`，应用数据库只保存对象后端、对象键、长度和 SHA-256。`filesystem` 使用 API/Worker 共享的 `export-data` 卷，目录由非 root `app` 用户写入且对象文件按 0600 创建；`s3` 使用配置的 bucket/prefix、服务端 AES-256 加密和租约 Token 专属对象键。S3 运行身份至少需要目标 prefix 的 `PutObject`、`GetObject`、`DeleteObject` 和 bucket 健康检查权限，正式交付物还必须配置对象生命周期、版本化/保留和备份策略。
+
+### 导出交付物配置与校验
+
+生产 Compose 默认使用文件系统卷：
+
+```dotenv
+EXPORT_STORAGE_BACKEND=filesystem
+EXPORT_STORAGE_PATH=/app/data/exports
+```
+
+接入企业 S3 或兼容服务时改为：
+
+```dotenv
+EXPORT_STORAGE_BACKEND=s3
+EXPORT_S3_BUCKET=sap-blueprint-prod
+EXPORT_S3_PREFIX=tenant-a/exports
+EXPORT_S3_REGION=cn-shanghai
+EXPORT_S3_ENDPOINT_URL=https://s3.example.com
+EXPORT_S3_ACCESS_KEY_ID=<injected-secret-or-omit-for-IAM-role>
+EXPORT_S3_SECRET_ACCESS_KEY=<injected-secret-or-omit-for-IAM-role>
+```
+
+访问密钥必须成对注入，不能写入镜像、Git 或验收摘要；优先使用目标平台的工作负载身份。API 和 Worker 必须使用完全一致的后端、bucket、prefix 和权限。启动后检查 readiness 中的 `artifact_storage` 与 `artifact_storage_status`，再执行一个 Markdown 和一个 Word 导出，并确认 PostgreSQL 的 `export_job.content` 为空、`artifact_backend` 与配置一致、下载内容 SHA-256 校验通过。
 
 ## PostgreSQL 备份
 
@@ -97,6 +128,25 @@ Get-FileHash -Algorithm SHA256 -LiteralPath $dbBackup | Format-List
 
 在 Linux/macOS 上可将最后的 `Set-Content` 替换为 `tee`，保留原始 UTF-8 SQL。
 
+## 导出交付物卷归档
+
+当 `EXPORT_STORAGE_BACKEND=filesystem` 时，PostgreSQL 备份不包含导出二进制，必须同时归档 `export-data` 卷。先停止 API/Worker 写入或安排维护窗口，再保存归档和 SHA256：
+
+```powershell
+$backupDir = (Resolve-Path output\backups).Path
+$volume = docker volume ls --format '{{.Name}}' |
+  Where-Object { $_ -like '*_export-data' } |
+  Select-Object -First 1
+if (-not $volume) { throw '找不到导出交付物数据卷' }
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$exportBackup = Join-Path $backupDir "export-data-$stamp.tar.gz"
+docker run --rm -v "${volume}:/source:ro" -v "${backupDir}:/backup" alpine `
+  tar czf "/backup/export-data-$stamp.tar.gz" -C /source .
+Get-FileHash -Algorithm SHA256 -LiteralPath $exportBackup | Format-List
+```
+
+恢复时在停机确认和校验 SHA256 后覆盖同一卷，再运行迁移和 readiness；不要把卷归档上传到 GitHub。`EXPORT_STORAGE_BACKEND=s3` 时不执行本节卷命令，改由对象存储平台执行版本化、跨区域/跨账户备份和恢复抽查，并将对象版本 ID、bucket、prefix、SHA256 和恢复时间写入受控交付记录。
+
 ## Chroma 索引归档
 
 先获取 Compose 项目生成的实际卷名，再以只读方式归档。API 继续运行时只做一致性允许的短暂备份窗口；正式备份建议先停止 API 写入。
@@ -115,7 +165,7 @@ Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $backupDir "chroma-$stamp
 
 ## 恢复流程
 
-恢复会覆盖数据库或索引，必须在变更窗口执行，并由项目负责人确认备份文件的 SHA256。恢复前先停止 API 和 Worker，保留当前卷快照，再恢复数据库和 Chroma，最后运行迁移和 readiness 检查。
+恢复会覆盖数据库、索引或导出卷，必须在变更窗口执行，并由项目负责人确认备份文件的 SHA256。恢复前先停止 API 和 Worker，保留当前卷快照，再恢复数据库、Chroma 和（如使用 filesystem）导出交付物卷，最后运行迁移和 readiness 检查。
 
 ```powershell
 # 1. 明确确认后才执行
@@ -133,7 +183,15 @@ Get-Content -LiteralPath .\output\backups\postgres-YYYYMMDD-HHmmss.sql -Raw -Enc
 docker run --rm -v "${volume}:/target" -v "${backupDir}:/backup:ro" alpine `
   sh -c 'rm -rf /target/* && tar xzf /backup/chroma-YYYYMMDD-HHmmss.tar.gz -C /target'
 
-# 4. 迁移、启动和健康检查
+# 4. 若使用 filesystem，再确认 export-data 卷和归档校验和后恢复
+$exportVolume = docker volume ls --format '{{.Name}}' |
+  Where-Object { $_ -like '*_export-data' } |
+  Select-Object -First 1
+if (-not $exportVolume) { throw '找不到导出交付物数据卷' }
+docker run --rm -v "${exportVolume}:/target" -v "${backupDir}:/backup:ro" alpine `
+  sh -c 'rm -rf /target/* && tar xzf /backup/export-data-YYYYMMDD-HHmmss.tar.gz -C /target'
+
+# 5. 迁移、启动和健康检查
 docker compose -f .\deploy\docker-compose.yml run --rm api alembic upgrade head
 docker compose -f .\deploy\docker-compose.yml up -d api worker web
 Invoke-WebRequest http://localhost:8080/health/ready
@@ -147,7 +205,7 @@ Invoke-WebRequest http://localhost:8080/health/ready
 
 | 现象或错误码 | 首要检查 | 处理原则 |
 | --- | --- | --- |
-| `/health/ready` 返回 503 | `APP_ENV`、OIDC/JWKS、Provider、`EXPORT_EXECUTION_MODE=worker` 和数据库连接 | readiness 恢复前停止业务写入，不绕过生产认证或导出执行门禁 |
+| `/health/ready` 返回 503 | `APP_ENV`、OIDC/JWKS、Provider、`EXPORT_EXECUTION_MODE=worker`、数据库连接和 `artifact_storage_status` | readiness 恢复前停止业务写入；检查 filesystem 卷权限或 S3 bucket/身份权限，不绕过认证或导出执行门禁 |
 | `DATABASE_WRITE_FAILED` | PostgreSQL 容器状态、连接数、磁盘、账号权限和 API 同请求号日志 | 确认事务已回滚；不要手工递增修订号，修复后重试原操作 |
 | `REVISION_CONFLICT` | 当前流程最新修订和客户端 `base_revision` | 先导出本地 JSON，再重新打开最新修订；不得静默覆盖 |
 | `KNOWLEDGE_UNAVAILABLE` | Chroma 卷、知识目录权限、索引版本和 API 日志 | 保留当前图；恢复索引后重试，不把无证据专业字段改为已验证 |
@@ -156,6 +214,7 @@ Invoke-WebRequest http://localhost:8080/health/ready
 | `EXPORT_NOT_READY` | `export_id` 状态、Worker 健康、任务开始时间和 `attempt_count` | 保持轮询并检查 Worker 日志；超过陈旧阈值后由 Worker 自动接管，不直接修改任务状态 |
 | `EXPORT_RENDER_FAILED` | Worker 内存、流程图完整性、字体、`export_id` 和结构化任务日志 | 当前图和修订保持可用；修复环境后创建新任务，不复用失败文件 |
 | `EXPORT_EXPIRED` | `expires_at`、保留配置和数据库时间 | 对同一修订创建新任务；正式交付物应从受控文档库获取 |
+| `EXPORT_STORAGE_UNAVAILABLE` | `artifact_backend`、对象键、SHA-256、文件系统卷或 S3 bucket/权限 | 保留当前图和任务元数据；恢复存储后重试下载。不要直接修改 `export_job` 或关闭完整性校验 |
 
 建议按顺序收集只读诊断信息：
 
@@ -176,4 +235,4 @@ Invoke-WebRequest -UseBasicParsing http://localhost:8080/health/ready
 
 ## 当前验收边界
 
-本机没有 Docker CLI，因此 Compose build/up、真实 PostgreSQL、卷归档和恢复尚未完成本机实跑。GitHub Actions 运行 `31355418269` 已验证 PostgreSQL/API/Web、两个健康 Worker、`export_execution=worker` 和 Alembic `20260809_0007 (head)`；12 个普通任务全部恰好执行一次，陈旧任务只接管一次，旧 Token 写回被拒绝，心跳新鲜任务未被接管，备份恢复后迁移头仍为 0007。目标环境仍需按本文档执行卷归档、恢复、真实长文档滚动中断和容量演练，并归档命令输出、SHA256、readiness 与导出验收结果。
+本机没有 Docker CLI，因此 Compose build/up、真实 PostgreSQL、卷归档和恢复尚未完成本机实跑。GitHub Actions 的下一次部署验收必须同时验证 readiness 的 `artifact_storage_status=ready`、0008 迁移、两个 Worker 共享文件系统交付物、数据库不保存二进制，以及 PostgreSQL 备份恢复；目标环境仍需按本文档执行导出卷/S3 归档恢复、真实长文档滚动中断和容量演练，并归档命令输出、SHA256、readiness 与导出验收结果。

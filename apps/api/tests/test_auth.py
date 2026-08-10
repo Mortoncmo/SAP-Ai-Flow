@@ -1,4 +1,6 @@
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from tempfile import gettempdir
 
 import jwt
 import pytest
@@ -47,6 +49,8 @@ def production_settings(**overrides: object) -> Settings:
         "oidc_user_id_claim": "sub",
         "oidc_clock_skew_seconds": 0,
         "export_execution_mode": "worker",
+        "export_storage_backend": "filesystem",
+        "export_storage_path": str(Path(gettempdir()) / "sap-ai-flow-test-artifacts"),
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -236,6 +240,8 @@ def test_readiness_requires_oidc_configuration_in_production():
         "database": "ready",
         "database_backend": "sqlite",
         "export_execution": "worker",
+        "artifact_storage": "filesystem",
+        "artifact_storage_status": "ready",
     }
 
 
@@ -251,6 +257,21 @@ def test_readiness_rejects_inline_export_execution_in_production():
 
     assert response.status_code == 503
     assert response.json()["export_execution"] == "inline"
+
+
+def test_readiness_rejects_database_artifact_storage_in_production():
+    app.dependency_overrides[get_settings] = lambda: production_settings(
+        export_storage_backend="database"
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.get("/health/ready")
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+    assert response.status_code == 503
+    assert response.json()["artifact_storage"] == "database"
+    assert response.json()["artifact_storage_status"] == "unavailable"
 
 
 def test_oidc_algorithms_reject_symmetric_or_unsigned_tokens():

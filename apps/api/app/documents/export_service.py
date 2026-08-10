@@ -7,9 +7,19 @@ from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session
 
 from app.agent.orchestrator import get_document_orchestrator
+from app.core.config import Settings
+from app.core.errors import FlowchartError
 from app.core.logging import log_event, safe_stack
-from app.db.models import ProcessRecord, ProcessRevisionRecord, ProjectRecord
+from app.db.models import ExportJobRecord, ProcessRecord, ProcessRevisionRecord, ProjectRecord
 from app.db.repository import BlueprintRepository
+from app.documents.artifact_store import (
+    ArtifactStorageError,
+    ArtifactStore,
+    StoredArtifact,
+    artifact_sha256,
+    build_artifact_store,
+    verify_artifact,
+)
 from app.documents.blueprint import BlueprintDocumentModel, render_docx, render_markdown
 from app.models.graph import GraphDocument
 
@@ -126,6 +136,97 @@ def export_filenames(
     )
 
 
+def cleanup_expired_export_artifacts(
+    repository: BlueprintRepository,
+    artifact_store: ArtifactStore | None,
+) -> int:
+    repository.expire_export_jobs()
+    cleaned = 0
+    for job in repository.list_expired_export_artifacts():
+        if job.artifact_key is not None:
+            if artifact_store is None or artifact_store.backend != job.artifact_backend:
+                log_event(
+                    logging.ERROR,
+                    "export_job.cleanup_storage_unavailable",
+                    export_id=job.id,
+                    artifact_backend=job.artifact_backend,
+                )
+                continue
+            try:
+                artifact_store.delete(job.artifact_key)
+            except ArtifactStorageError as exc:
+                log_event(
+                    logging.ERROR,
+                    "export_job.cleanup_failed",
+                    export_id=job.id,
+                    artifact_backend=job.artifact_backend,
+                    exception_type=type(exc).__name__,
+                )
+                continue
+        if repository.clear_export_artifact(job.id):
+            cleaned += 1
+    return cleaned
+
+
+def load_export_artifact(
+    job: ExportJobRecord,
+    settings: Settings,
+    *,
+    artifact_store: ArtifactStore | None = None,
+) -> bytes:
+    backend = job.artifact_backend or "database"
+    if backend == "database":
+        if job.content is None:
+            raise _storage_unavailable(job.id)
+        content = job.content
+    else:
+        store = artifact_store or build_artifact_store(settings)
+        if store is None or store.backend != backend or job.artifact_key is None:
+            raise _storage_unavailable(job.id)
+        try:
+            content = store.get(job.artifact_key)
+        except ArtifactStorageError as exc:
+            raise _storage_unavailable(job.id) from exc
+    try:
+        verify_artifact(
+            content,
+            expected_length=job.content_length,
+            expected_sha256=job.content_sha256,
+        )
+    except ArtifactStorageError as exc:
+        raise _storage_unavailable(job.id) from exc
+    return content
+
+
+def _storage_unavailable(export_id: str) -> FlowchartError:
+    return FlowchartError(
+        "EXPORT_STORAGE_UNAVAILABLE",
+        "导出文件存储暂不可用，请稍后重试。",
+        status_code=503,
+        details={"export_id": export_id},
+    )
+
+
+def _delete_artifact_safely(
+    artifact_store: ArtifactStore | None,
+    stored_artifact: StoredArtifact | None,
+    *,
+    export_id: str,
+) -> None:
+    if artifact_store is None or stored_artifact is None:
+        return
+    try:
+        artifact_store.delete(stored_artifact.key)
+    except ArtifactStorageError as exc:
+        log_event(
+            logging.ERROR,
+            "export_job.compensation_delete_failed",
+            export_id=export_id,
+            artifact_backend=stored_artifact.backend,
+            exception_type=type(exc).__name__,
+        )
+
+
 def process_export_job(
     export_id: str,
     bind: Engine | Connection,
@@ -133,9 +234,11 @@ def process_export_job(
     retention_hours: int,
     stale_minutes: int,
     heartbeat_seconds: float,
+    artifact_store: ArtifactStore | None = None,
 ) -> bool:
     claim_token: str | None = None
     attempt_count: int | None = None
+    stored_artifact: StoredArtifact | None = None
     with Session(bind=bind, expire_on_commit=False) as session:
         repository = BlueprintRepository(session)
         try:
@@ -173,15 +276,37 @@ def process_export_job(
                 release_no=revision.release_no,
                 extension=extension,
             )
+            if artifact_store is not None:
+                stored_artifact = artifact_store.put(
+                    export_id=export_id,
+                    claim_token=claim_token,
+                    content=content,
+                    media_type=media_type,
+                )
             completed = repository.complete_export_job(
                 export_id=export_id,
                 claim_token=claim_token,
                 filename=unicode_filename,
                 fallback_filename=fallback_filename,
                 media_type=media_type,
-                content=content,
+                content=content if stored_artifact is None else None,
                 retention_hours=retention_hours,
+                artifact_backend=(stored_artifact.backend if stored_artifact else "database"),
+                artifact_key=stored_artifact.key if stored_artifact else None,
+                content_sha256=(
+                    stored_artifact.sha256 if stored_artifact else artifact_sha256(content)
+                ),
+                content_length=(stored_artifact.content_length if stored_artifact else len(content)),
             )
+            if not completed:
+                _delete_artifact_safely(
+                    artifact_store,
+                    stored_artifact,
+                    export_id=export_id,
+                )
+                stored_artifact = None
+            else:
+                stored_artifact = None
             log_event(
                 logging.INFO if completed else logging.WARNING,
                 "export_job.completed" if completed else "export_job.lease_lost",
@@ -191,6 +316,12 @@ def process_export_job(
             )
         except Exception as exc:
             session.rollback()
+            _delete_artifact_safely(
+                artifact_store,
+                stored_artifact,
+                export_id=export_id,
+            )
+            stored_artifact = None
             log_event(
                 logging.ERROR,
                 "export_job.failed",

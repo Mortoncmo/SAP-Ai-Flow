@@ -36,6 +36,7 @@ from app.db.models import (
 )
 from app.db.repository import BlueprintRepository
 from app.documents import export_service
+from app.documents.artifact_store import FilesystemArtifactStore
 from app.knowledge.service import get_knowledge_service
 from app.main import app
 from app.models.graph import SapContext
@@ -1226,6 +1227,8 @@ def test_async_export_job_persists_status_download_and_expiration(persistence_cl
         job = session.get(ExportJobRecord, export_id)
         assert job is not None
         assert job.content == download.content
+        assert job.artifact_backend == "database"
+        assert job.content_sha256 is not None
         job.expires_at = datetime.now(UTC) - timedelta(seconds=1)
         session.commit()
     finally:
@@ -1241,6 +1244,72 @@ def test_async_export_job_persists_status_download_and_expiration(persistence_cl
     )
     assert expired_download.status_code == 410
     assert expired_download.json()["error"]["code"] == "EXPORT_EXPIRED"
+
+
+def test_filesystem_export_keeps_binary_out_of_database_and_cleans_expired_artifact(
+    persistence_client,
+    tmp_path,
+):
+    client, database = persistence_client
+    storage_root = tmp_path / "export-artifacts"
+    settings = Settings(
+        _env_file=None,
+        export_execution_mode="worker",
+        export_storage_backend="filesystem",
+        export_storage_path=str(storage_root),
+    )
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        process_id = _create_process(client)
+        created = client.post(
+            f"/api/v1/processes/{process_id}/exports/jobs",
+            json={"revision_no": 0, "format": "markdown"},
+        )
+        export_id = created.json()["export_id"]
+        assert created.json()["status"] == "pending"
+        assert ExportJobWorker(database, settings).run_once() == 1
+        status = client.get(f"/api/v1/processes/{process_id}/exports/jobs/{export_id}")
+        assert status.status_code == 200, status.text
+        assert status.json()["status"] == "completed"
+
+        with database.session_factory() as session:
+            job = session.get(ExportJobRecord, export_id)
+            assert job is not None
+            assert job.content is None
+            assert job.artifact_backend == "filesystem"
+            assert job.artifact_key is not None
+            assert job.content_sha256 is not None
+            artifact_path = storage_root / job.artifact_key
+            assert artifact_path.is_file()
+            expected_content = artifact_path.read_bytes()
+
+        download = client.get(status.json()["download_url"])
+        assert download.status_code == 200, download.text
+        assert download.content == expected_content
+
+        artifact_path.write_bytes(bytes([expected_content[0] ^ 1]) + expected_content[1:])
+        corrupted = client.get(status.json()["download_url"])
+        assert corrupted.status_code == 503
+        assert corrupted.json()["error"]["code"] == "EXPORT_STORAGE_UNAVAILABLE"
+        assert str(storage_root) not in corrupted.text
+
+        with database.session_factory() as session:
+            job = session.get(ExportJobRecord, export_id)
+            assert job is not None
+            job.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            session.commit()
+
+        expired = client.get(f"/api/v1/processes/{process_id}/exports/jobs/{export_id}")
+        assert expired.status_code == 200, expired.text
+        assert expired.json()["status"] == "expired"
+        assert not artifact_path.exists()
+        with database.session_factory() as session:
+            job = session.get(ExportJobRecord, export_id)
+            assert job is not None
+            assert job.artifact_key is None
+            assert job.content_sha256 is None
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
 
 
 def test_async_export_failure_is_safe_and_query_is_process_scoped(
@@ -1481,3 +1550,53 @@ def test_long_export_heartbeat_prevents_false_stale_reclaim(
         completed = BlueprintRepository(session).require_export_job_unscoped(export_id)
         assert completed.status == "completed"
         assert completed.attempt_count == 1
+
+
+def test_lost_export_lease_deletes_attempt_scoped_filesystem_artifact(
+    persistence_client,
+    tmp_path,
+    monkeypatch,
+):
+    client, database = persistence_client
+    process_id = _create_process(client)
+    with database.session_factory() as session:
+        job = BlueprintRepository(session).create_export_job(
+            process_id=process_id,
+            revision_no=0,
+            format="markdown",
+            user_id="local-user",
+        )
+        export_id = job.id
+
+    original_render_export = export_service.render_export
+    replacement_claim = "export-claim-replacement"
+
+    def render_then_replace_lease(model, format):
+        rendered = original_render_export(model, format)
+        with database.session_factory() as session:
+            claimed_job = session.get(ExportJobRecord, export_id)
+            assert claimed_job is not None
+            claimed_job.claim_token = replacement_claim
+            session.commit()
+        return rendered
+
+    monkeypatch.setattr(export_service, "render_export", render_then_replace_lease)
+    storage_root = tmp_path / "lease-artifacts"
+    store = FilesystemArtifactStore(str(storage_root))
+
+    assert export_service.process_export_job(
+        export_id,
+        database.engine,
+        retention_hours=24,
+        stale_minutes=5,
+        heartbeat_seconds=30,
+        artifact_store=store,
+    )
+
+    assert list(storage_root.rglob("*.artifact")) == []
+    with database.session_factory() as session:
+        running = session.get(ExportJobRecord, export_id)
+        assert running is not None
+        assert running.status == "running"
+        assert running.claim_token == replacement_claim
+        assert running.artifact_key is None

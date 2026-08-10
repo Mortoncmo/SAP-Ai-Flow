@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     export_worker_poll_seconds: float = Field(default=1.0, ge=0.1, le=60)
     export_worker_batch_size: int = Field(default=8, ge=1, le=100)
     export_lease_heartbeat_seconds: float = Field(default=30.0, ge=0.1, le=60)
+    export_storage_backend: Literal["database", "filesystem", "s3"] = "database"
+    export_storage_path: str = "../../output/exports"
+    export_s3_bucket: str = ""
+    export_s3_prefix: str = "sap-blueprint-exports"
+    export_s3_region: str = ""
+    export_s3_endpoint_url: str = ""
+    export_s3_access_key_id: str = ""
+    export_s3_secret_access_key: str = ""
     database_url: str = "sqlite:///../../output/sap_blueprint.db"
     database_auto_create: bool = True
     knowledge_root: str = ""
@@ -87,6 +95,12 @@ class Settings(BaseSettings):
                 "EXPORT_LEASE_HEARTBEAT_SECONDS must not exceed one third of "
                 "EXPORT_STALE_MINUTES"
             )
+        if bool(self.export_s3_access_key_id) != bool(self.export_s3_secret_access_key):
+            raise ValueError(
+                "EXPORT_S3_ACCESS_KEY_ID and EXPORT_S3_SECRET_ACCESS_KEY must be set together"
+            )
+        if self.export_s3_prefix.startswith("/") or ".." in self.export_s3_prefix.split("/"):
+            raise ValueError("EXPORT_S3_PREFIX must be a relative object prefix")
         return self
 
     @property
@@ -97,6 +111,14 @@ class Settings(BaseSettings):
             and self.oidc_jwks_url.strip()
             and self.oidc_user_id_claim.strip()
         )
+
+    @property
+    def export_storage_configured(self) -> bool:
+        if self.export_storage_backend == "database":
+            return self.app_env == "development"
+        if self.export_storage_backend == "filesystem":
+            return bool(self.export_storage_path.strip())
+        return bool(self.export_s3_bucket.strip())
 
 
 @lru_cache

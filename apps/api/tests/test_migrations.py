@@ -32,7 +32,14 @@ def test_initial_migration_upgrades_and_downgrades_empty_sqlite(tmp_path, monkey
             set(inspect(engine).get_table_names())
         )
         export_columns = {column["name"] for column in inspect(engine).get_columns("export_job")}
-        assert {"claim_token", "attempt_count", "heartbeat_at"} <= export_columns
+        assert {
+            "claim_token",
+            "attempt_count",
+            "heartbeat_at",
+            "artifact_backend",
+            "artifact_key",
+            "content_sha256",
+        } <= export_columns
         command.downgrade(config, "base")
         assert inspect(engine).get_table_names() == ["alembic_version"]
         engine.dispose()
@@ -81,6 +88,9 @@ def test_export_worker_lease_migrations_backfill_and_roll_back(tmp_path, monkeyp
         assert "claim_token" not in columns
         assert "attempt_count" not in columns
         assert "heartbeat_at" not in columns
+        assert "artifact_backend" not in columns
+        assert "artifact_key" not in columns
+        assert "content_sha256" not in columns
         engine.dispose()
     finally:
         get_settings.cache_clear()
@@ -98,9 +108,17 @@ def test_sqlite_development_startup_upgrades_existing_export_jobs(tmp_path, monk
         inspector = inspect(database.engine)
         columns = {column["name"] for column in inspector.get_columns("export_job")}
         indexes = {index["name"] for index in inspector.get_indexes("export_job")}
-        assert {"claim_token", "attempt_count", "heartbeat_at"} <= columns
+        assert {
+            "claim_token",
+            "attempt_count",
+            "heartbeat_at",
+            "artifact_backend",
+            "artifact_key",
+            "content_sha256",
+        } <= columns
         assert "ix_export_job_status_created_at" in indexes
         assert "ix_export_job_status_heartbeat_at" in indexes
+        assert "ix_export_job_status_expires_at" in indexes
         database.engine.dispose()
     finally:
         get_settings.cache_clear()

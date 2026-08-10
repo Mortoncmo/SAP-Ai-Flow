@@ -10,18 +10,20 @@ from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging, log_event
 from app.db.database import Database, get_database
 from app.db.repository import BlueprintRepository
-from app.documents.export_service import process_export_job
+from app.documents.artifact_store import ArtifactStorageError, ArtifactStore, build_artifact_store
+from app.documents.export_service import cleanup_expired_export_artifacts, process_export_job
 
 
 class ExportJobWorker:
     def __init__(self, database: Database, settings: Settings) -> None:
         self.database = database
         self.settings = settings
+        self.artifact_store = build_artifact_store(settings)
 
     def run_once(self) -> int:
         with self.database.session_factory() as session:
             repository = BlueprintRepository(session)
-            repository.expire_export_jobs()
+            cleanup_expired_export_artifacts(repository, self.artifact_store)
             candidates = repository.list_export_job_candidates(
                 stale_minutes=self.settings.export_stale_minutes,
                 limit=self.settings.export_worker_batch_size,
@@ -35,6 +37,7 @@ class ExportJobWorker:
                 retention_hours=self.settings.export_retention_hours,
                 stale_minutes=self.settings.export_stale_minutes,
                 heartbeat_seconds=self.settings.export_lease_heartbeat_seconds,
+                artifact_store=self.artifact_store,
             ):
                 claimed += 1
         return claimed
@@ -46,6 +49,7 @@ class ExportJobWorker:
             poll_seconds=self.settings.export_worker_poll_seconds,
             batch_size=self.settings.export_worker_batch_size,
             heartbeat_seconds=self.settings.export_lease_heartbeat_seconds,
+            artifact_storage=self.settings.export_storage_backend,
         )
         while not stop_event.is_set():
             claimed = self.run_once()
@@ -63,6 +67,14 @@ def database_healthcheck(database: Database) -> bool:
     return True
 
 
+def artifact_storage_healthcheck(settings: Settings, store: ArtifactStore | None) -> bool:
+    if not settings.export_storage_configured:
+        return False
+    if settings.export_storage_backend == "database":
+        return True
+    return bool(store and store.available())
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the persistent blueprint export worker")
     parser.add_argument("--healthcheck", action="store_true")
@@ -72,7 +84,15 @@ def main() -> int:
     configure_logging(settings.log_level)
     if args.healthcheck:
         database = Database(settings.database_url, create_schema=False)
-        return 0 if database_healthcheck(database) else 1
+        try:
+            artifact_store = build_artifact_store(settings)
+        except ArtifactStorageError:
+            return 1
+        healthy = database_healthcheck(database) and artifact_storage_healthcheck(
+            settings,
+            artifact_store,
+        )
+        return 0 if healthy else 1
 
     database = get_database()
     stop_event = Event()

@@ -15,6 +15,8 @@ from app.db.models import (
     utc_now,
 )
 from app.db.repository import BlueprintRepository
+from app.documents.artifact_store import build_artifact_store
+from app.documents.export_service import load_export_artifact
 from app.graph.ids import new_id
 from app.models.graph import Edge, GraphDocument, Node, NodeType, SapContext, Swimlane
 
@@ -27,6 +29,7 @@ def main() -> int:
         raise RuntimeError("Export worker acceptance requires EXPORT_EXECUTION_MODE=worker")
 
     database = Database(settings.database_url, create_schema=False)
+    artifact_store = build_artifact_store(settings)
     user_id = "ci-export-worker"
     project_id: str | None = None
     process_id: str | None = None
@@ -145,9 +148,14 @@ def main() -> int:
 
         total_content_length = 0
         for job in final.values():
-            if job.content is None or job.content_length != len(job.content):
+            content = load_export_artifact(job, settings, artifact_store=artifact_store)
+            if job.content_length != len(content):
                 raise RuntimeError(f"Export worker produced no durable content for {job.id}")
-            rendered = job.content.decode("utf-8")
+            if settings.export_storage_backend != "database" and job.content is not None:
+                raise RuntimeError(f"Export worker persisted database content for {job.id}")
+            if job.artifact_backend != settings.export_storage_backend:
+                raise RuntimeError(f"Export worker used an unexpected backend for {job.id}")
+            rendered = content.decode("utf-8")
             if "# Export Worker Acceptance" not in rendered or "## 3. 流程步骤" not in rendered:
                 raise RuntimeError(f"Export worker produced unexpected Markdown for {job.id}")
             total_content_length += job.content_length
@@ -176,6 +184,8 @@ def main() -> int:
                     "status": "passed",
                     "database_backend": database.engine.url.get_backend_name(),
                     "export_execution": settings.export_execution_mode,
+                    "artifact_storage": settings.export_storage_backend,
+                    "database_content_empty": all(job.content is None for job in final.values()),
                     "parallel_job_count": len(pending_final),
                     "exactly_once_job_count": sum(
                         job.attempt_count == 1 for job in pending_final
@@ -192,6 +202,17 @@ def main() -> int:
     finally:
         if project_id is not None:
             with database.session_factory() as session:
+                artifact_keys = list(
+                    session.scalars(
+                        select(ExportJobRecord.artifact_key).where(
+                            ExportJobRecord.process_id == process_id,
+                            ExportJobRecord.artifact_key.is_not(None),
+                        )
+                    )
+                )
+                if artifact_store is not None:
+                    for artifact_key in artifact_keys:
+                        artifact_store.delete(artifact_key)
                 if export_ids or stale_export_id is not None:
                     session.execute(
                         delete(ExportJobRecord).where(

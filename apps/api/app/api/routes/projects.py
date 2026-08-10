@@ -21,9 +21,12 @@ from app.db.models import (
     ProjectRecord,
 )
 from app.db.repository import BlueprintRepository
+from app.documents.artifact_store import ArtifactStore, build_artifact_store
 from app.documents.export_service import (
     blueprint_document,
+    cleanup_expired_export_artifacts,
     export_filenames,
+    load_export_artifact,
     process_export_job,
     render_export,
 )
@@ -64,6 +67,12 @@ router = APIRouter(prefix="/api/v1", tags=["projects"])
 
 def get_repository(session: Session = Depends(get_db_session)) -> BlueprintRepository:
     return BlueprintRepository(session)
+
+
+def get_export_artifact_store(
+    settings: Settings = Depends(get_settings),
+) -> ArtifactStore | None:
+    return build_artifact_store(settings)
 
 
 @lru_cache(maxsize=16)
@@ -566,9 +575,11 @@ def create_export_job(
     background_tasks: BackgroundTasks,
     repository: BlueprintRepository = Depends(get_repository),
     settings: Settings = Depends(get_settings),
+    artifact_store: ArtifactStore | None = Depends(get_export_artifact_store),
     user: UserContext = Depends(get_user_context),
 ) -> ExportJobResponse:
     _authorize_process(repository, process_id, user, ProjectRole.VIEWER)
+    cleanup_expired_export_artifacts(repository, artifact_store)
     repository.require_revision(process_id, request.revision_no)
     job = repository.create_export_job(
         process_id=process_id,
@@ -584,6 +595,7 @@ def create_export_job(
             retention_hours=settings.export_retention_hours,
             stale_minutes=settings.export_stale_minutes,
             heartbeat_seconds=settings.export_lease_heartbeat_seconds,
+            artifact_store=artifact_store,
         )
     return _export_job_response(job)
 
@@ -598,9 +610,11 @@ def get_export_job(
     background_tasks: BackgroundTasks,
     repository: BlueprintRepository = Depends(get_repository),
     settings: Settings = Depends(get_settings),
+    artifact_store: ArtifactStore | None = Depends(get_export_artifact_store),
     user: UserContext = Depends(get_user_context),
 ) -> ExportJobResponse:
     _authorize_process(repository, process_id, user, ProjectRole.VIEWER)
+    cleanup_expired_export_artifacts(repository, artifact_store)
     job = repository.require_export_job(process_id, export_id)
     if settings.export_execution_mode == "inline" and job.status in {"pending", "running"}:
         background_tasks.add_task(
@@ -610,6 +624,7 @@ def get_export_job(
             retention_hours=settings.export_retention_hours,
             stale_minutes=settings.export_stale_minutes,
             heartbeat_seconds=settings.export_lease_heartbeat_seconds,
+            artifact_store=artifact_store,
         )
     return _export_job_response(job)
 
@@ -619,9 +634,12 @@ def download_export_job(
     process_id: str,
     export_id: str,
     repository: BlueprintRepository = Depends(get_repository),
+    settings: Settings = Depends(get_settings),
+    artifact_store: ArtifactStore | None = Depends(get_export_artifact_store),
     user: UserContext = Depends(get_user_context),
 ) -> Response:
     _authorize_process(repository, process_id, user, ProjectRole.VIEWER)
+    cleanup_expired_export_artifacts(repository, artifact_store)
     job = repository.require_export_job(process_id, export_id)
     if job.status == "expired":
         raise FlowchartError(
@@ -637,15 +655,16 @@ def download_export_job(
             status_code=409,
             details={"export_id": export_id},
         )
-    if job.status != "completed" or job.content is None:
+    if job.status != "completed":
         raise FlowchartError(
             "EXPORT_NOT_READY",
             "导出任务尚未完成。",
             status_code=409,
             details={"export_id": export_id, "status": job.status},
         )
+    content = load_export_artifact(job, settings, artifact_store=artifact_store)
     return Response(
-        content=job.content,
+        content=content,
         media_type=job.media_type or "application/octet-stream",
         headers={
             "Content-Disposition": (
