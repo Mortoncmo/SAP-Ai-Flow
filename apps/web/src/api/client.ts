@@ -18,7 +18,7 @@ import type {
   ProjectRole,
 } from '../types'
 import { parseDownloadFilename } from '../export'
-import { getAccessToken } from '../auth/oidc'
+import { clearOidcSession, getAccessToken } from '../auth/oidc'
 
 const API_ROOT = import.meta.env.VITE_API_URL ?? ''
 export const API_REQUEST_TIMEOUT_MS = timeoutValue(
@@ -474,7 +474,9 @@ async function authorizedFetch(
       headers.set('X-Request-ID', `web_${crypto.randomUUID().replaceAll('-', '')}`)
     }
     if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
-    return await fetch(input, { ...init, headers, signal: controller.signal })
+    const response = await fetch(input, { ...init, headers, signal: controller.signal })
+    if (response.status === 401) await clearOidcSession().catch(() => undefined)
+    return response
   } catch (caught) {
     if (timedOut) {
       throw new ApiError('请求超时，当前数据未改变，请重试。', 'REQUEST_TIMEOUT')

@@ -27,6 +27,23 @@ SELECT tenant_id, COUNT(*) FROM project GROUP BY tenant_id ORDER BY tenant_id;
 
 结果中不得残留 `local`，也不要把 `local` 加入生产 allowlist 绕过映射。随后分别使用两个租户中 subject 相同的测试账号验证：本租户项目可列出，另一租户项目列表不可见且按 ID 访问返回 404。
 
+### 企业 IdP 客户端与 Token 生命周期验收
+
+在身份提供方登记公共 SPA 客户端，只启用 Authorization Code + PKCE S256，不配置客户端密钥，不启用 Implicit 或 Resource Owner Password 流程。回调地址和退出后地址必须与实际 Web 源完全一致；API audience、issuer、JWKS、稳定用户 claim 和 tenant claim 必须与后端配置一致。修改 `VITE_OIDC_*` 后重新构建 Web 镜像，不能只重启旧镜像。
+
+Refresh Token 不是强制前提。只有安全团队允许公共 SPA 使用 Refresh Token 且 IdP 支持轮换时，才在 `VITE_OIDC_SCOPE` 增加 `offline_access` 并配置相应客户端策略。Web 在 Access Token 最后 60 秒使用 Refresh Token 单飞续期；未签发 Refresh Token 时，Access Token 到期会清除本地会话并要求重新登录。受保护 API 返回 401 时也会清理本地会话；系统不会自动重放被拒绝的写请求。
+
+目标环境至少执行以下验收并归档脱敏证据：
+
+1. 使用已批准租户的顾问账号登录，确认授权请求为 `response_type=code`、`code_challenge_method=S256`，回调后 URL 不残留 code/state，页头显示稳定用户标识。
+2. 创建一个验收项目，确认受保护 API 使用 Bearer Token、创建者角色为 `project_admin`，数据库 `project.tenant_id` 等于真实 tenant claim；不得在证据中保存 Token、授权码或完整 claim 正文。
+3. 使用另一允许租户的同名或同 subject 测试账号验证项目列表隔离和跨租户 404；再使用 allowlist 外租户验证 API 返回 401，不能通过客户端头覆盖租户。
+4. IdP 签发 Refresh Token 时，使用短生命周期测试策略等待续期，确认 Token 端点出现 `grant_type=refresh_token`、页头保持登录且后续只读 API 成功；只记录请求类型、时间和状态，不导出请求正文。并发触发时只应发生一次续期。
+5. IdP 不签发 Refresh Token 或撤销 Refresh Token 时，等待 Access Token 到期，确认页头显示“登录已过期，请重新登录”、项目选择和新建项目被禁用、旧 Token 不再用于后续请求；重新登录后只读 API 恢复。不要用自动重放写操作证明恢复。
+6. 执行退出，确认本地 `sessionStorage` 会话被删除、IdP 退出回调返回登记地址、匿名项目 API 返回 401。若企业策略要求 Refresh Token 撤销，另由 IdP 管理日志证明撤销或轮换链失效。
+
+验收包应包含执行环境和版本、脱敏客户端配置、`/health/ready` 结果、测试账号/租户的内部引用、项目 tenant 聚合查询、登录/续期或过期/退出时间线、相关 `request_id`、跨租户结果和安全/项目负责人签字。标准测试 IdP 的 CI 结果只证明通用协议实现，不替代上述企业策略和真实 claim 联调。
+
 ## 指标与告警
 
 仓库提供 `deploy/monitoring/prometheus.yml`、`alerts.yml` 和 `alertmanager.yml` 作为监控接入基线。Prometheus 必须与 API 位于同一受控网络，抓取 `http://api:8000/internal/metrics`；Nginx 对外访问该路径固定返回 404。开发或演示环境可用以下命令启动本地 Prometheus、Alertmanager 和脱敏演练接收器，生产环境应接入企业现有 Prometheus/Alertmanager，并按平台规则配置保留、通知、静默和升级策略：
@@ -270,4 +287,4 @@ Invoke-WebRequest -UseBasicParsing http://localhost:8080/health/ready
 
 ## 当前验收边界
 
-本机没有 Docker CLI，因此 Compose build/up、真实 PostgreSQL、卷归档和恢复尚未完成本机实跑。GitHub Actions 运行 `31383523298` 已通过 API、Web、DOCX 和 deploy 四个作业；deploy 对 80 节点 DOCX 在首次领取和心跳续租后强制终止 Worker，等待 65 秒真实陈旧窗口再由替代 Worker 完成第 2 次尝试，结果为 `status=passed`、`database_backend=postgresql`、`artifact_storage=filesystem`、`database_content_empty=true` 和 `content_length=125018`，并上传 `deployment-acceptance` 证据包。运行 `31380969503` 另行通过 `amtool check-config`、Alertmanager/Prometheus readiness、monitoring profile、合成告警注入和脱敏通知接收；`31377108914` 和 `31373701595` 分别验证了目标 S3 提交回归和租户/0009/双 Worker/PostgreSQL 备份恢复基线。目标环境还需按本文档执行真实 IdP tenant claim/存量项目映射、企业 Prometheus/Alertmanager 与集中日志平台联调、真实通知路由、真实 S3 写入与非当前版本/恢复验收、导出卷归档恢复，以及使用代表性最大文档和实际部署控制器完成滚动中断与容量演练，并归档命令输出、SHA256、readiness 与部署验收报告。
+本机没有 Docker CLI，因此 Compose build/up、真实 PostgreSQL、卷归档和恢复尚未完成本机实跑。GitHub Actions 运行 `31396280725` 对实施基线 4.12 的 API、Web、DOCX 和 deploy 四个作业全部通过；deploy 再次通过标准测试 IdP Authorization Code + PKCE/tenant/退出门禁、Alertmanager 通知回调、双 Worker 租约栅栏、80 节点 DOCX 进程中断恢复和 PostgreSQL 备份恢复，并上传 `deployment-acceptance` 证据包。标准测试 IdP 的脱敏报告确认 PKCE、Token 交换、Bearer API、tenant 持久化、退出和匿名拒绝，仍不替代真实企业 IdP 的 Refresh Token 签发/轮换或到期重新登录策略。目标环境还需按本文档执行真实 IdP tenant claim/存量项目映射、企业 Prometheus/Alertmanager 与集中日志平台联调、真实通知路由、真实 S3 写入与非当前版本/恢复验收、导出卷归档恢复，以及使用代表性最大文档和实际部署控制器完成滚动中断与容量演练，并归档命令输出、SHA256、readiness 与部署验收报告。

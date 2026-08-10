@@ -1,13 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('../auth/oidc', () => ({ getAccessToken: vi.fn() }))
+vi.mock('../auth/oidc', () => ({
+  clearOidcSession: vi.fn(),
+  getAccessToken: vi.fn(),
+}))
 
-import { getAccessToken } from '../auth/oidc'
+import { clearOidcSession, getAccessToken } from '../auth/oidc'
 
 import {
   addProjectMember,
   API_REQUEST_TIMEOUT_MS,
   ApiError,
+  createProject,
   exportBlueprint,
   listProjectAudits,
   listProjectMembers,
@@ -18,6 +22,7 @@ import {
 } from './client'
 
 const getAccessTokenMock = vi.mocked(getAccessToken)
+const clearOidcSessionMock = vi.mocked(clearOidcSession)
 
 const abortableFetch: typeof fetch = (_input, init) =>
   new Promise((_resolve, reject) => {
@@ -33,6 +38,8 @@ const abortableFetch: typeof fetch = (_input, init) =>
 beforeEach(() => {
   getAccessTokenMock.mockReset()
   getAccessTokenMock.mockResolvedValue(undefined)
+  clearOidcSessionMock.mockReset()
+  clearOidcSessionMock.mockResolvedValue(undefined)
 })
 
 const member = {
@@ -286,6 +293,28 @@ describe('authenticated API requests', () => {
     const init = fetchMock.mock.calls[0][1]
     expect(new Headers(init?.headers).get('X-Request-ID')).toMatch(/^web_[a-f0-9]+$/)
     expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer signed-access-token')
+  })
+
+  it('does not replay a rejected write request after an authentication failure', async () => {
+    getAccessTokenMock.mockResolvedValue('expired-access-token')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: { code: 'AUTHENTICATION_REQUIRED', message: '请重新登录。' },
+        }),
+        {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    )
+
+    await expect(createProject('不应重放')).rejects.toMatchObject({
+      code: 'AUTHENTICATION_REQUIRED',
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('POST')
+    expect(clearOidcSessionMock).toHaveBeenCalledTimes(1)
   })
 
   it('converts the client deadline into a stable timeout error', async () => {

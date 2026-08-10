@@ -223,6 +223,8 @@ VITE_OIDC_AUDIENCE=sap-ai-flow
 
 `VITE_OIDC_REDIRECT_URI` 和 `VITE_OIDC_POST_LOGOUT_REDIRECT_URI` 必须与 Web 应用同源，并在身份提供方登记。开发服务器默认回调为 `http://localhost:5173/auth/callback`；Compose 默认分别使用当前 `http://localhost:8080` 源下的 `/auth/callback` 和 `/`。Vite 变量会写入前端构建产物，修改后必须重新构建 Web 镜像；其中不能放置客户端密钥或其他秘密。
 
+Access Token 进入最后 60 秒且 IdP 已向公共 SPA 签发 Refresh Token 时，Web 使用 Refresh Token 单飞续期，并把新会话同步到页头；并发 API 请求不会重复续期。若 IdP 不允许公共客户端持有 Refresh Token，可保持默认 scope，不必增加 `offline_access`；Token 到期或受保护 API 返回 401 后，Web 会清除本地 OIDC 会话、切回登录态并禁用项目操作。续期失败或 API 401 不会自动重放写请求。企业 IdP 是否签发、轮换和撤销 Refresh Token 必须按安全策略在目标环境联调，具体步骤见 [deploy/OPERATIONS.md](deploy/OPERATIONS.md)。
+
 `project_admin` 可在页头的项目访问弹窗中切换“成员 / 审计”标签。成员新增、角色变更、移除和外部模型策略变更均会记录操作者、时间和前后状态；成员写入与审计记录使用同一数据库事务。
 
 生产环境不会信任 `X-User-ID`、`X-Project-Role` 或任何客户端租户头。JWT 必须同时包含用户 claim 和 `OIDC_TENANT_ID_CLAIM`（默认 `tid`），且租户必须命中 `OIDC_ALLOWED_TENANT_IDS`；项目创建时固化当前租户，跨租户项目、流程和知识资源统一隐藏为 404。缺少 OIDC 或租户 allowlist 配置时 `/health/ready` 返回 503；无项目上下文的流程修改、知识检索和 GAP 分析兼容接口在非开发环境返回 404。

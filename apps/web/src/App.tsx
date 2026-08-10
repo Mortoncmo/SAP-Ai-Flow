@@ -69,6 +69,7 @@ import {
   initializeOidcAuth,
   startOidcSignIn,
   startOidcSignOut,
+  subscribeOidcAuth,
   type AuthSession,
 } from './auth/oidc'
 import { Inspector } from './components/Inspector'
@@ -1528,7 +1529,20 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    let unsubscribe: () => void = () => undefined
+    try {
+      unsubscribe = subscribeOidcAuth(
+        (session) => {
+          setAuthSession(session)
+          if (session.authenticated) setAuthError('')
+        },
+        setAuthError,
+      )
+    } catch {
+      // Initialization below owns configuration error rendering.
+    }
     void loadAuthSession()
+    return unsubscribe
   }, [loadAuthSession])
 
   const handleSignIn = async () => {
