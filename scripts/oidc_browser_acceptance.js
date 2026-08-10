@@ -10,6 +10,10 @@ async page => {
   const assert = (condition, message) => {
     if (!condition) throw new Error(message)
   }
+  const redact = value => String(value ?? 'unknown error')
+    .replace(/((?:code|state|access_token|id_token|refresh_token)=)[^&\s"']+/gi, '$1[REDACTED]')
+    .replace(/Bearer\s+[^\s"']+/gi, 'Bearer [REDACTED]')
+    .slice(0, 1000)
 
   page.on('console', message => {
     if (message.type() === 'error') consoleErrors.push(message.text())
@@ -85,7 +89,15 @@ async page => {
     assert((await page.request.get(`${appOrigin}/api/v1/projects`)).status() === 401, 'anonymous API was not rejected')
     assert(consoleErrors.length === 0, `browser console errors: ${consoleErrors.join(' | ')}`)
     assert(pageErrors.length === 0, `uncaught page errors: ${pageErrors.join(' | ')}`)
+    return { status: 'passed' }
   } catch (error) {
-    throw new Error(`[${stage}] ${error.message}`)
+    const pagePath = await page.evaluate(() => `${window.location.origin}${window.location.pathname}`)
+      .catch(() => 'unavailable')
+    return {
+      status: 'failed',
+      stage,
+      message: redact(error?.message ?? error),
+      page_path: pagePath,
+    }
   }
 }

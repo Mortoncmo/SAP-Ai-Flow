@@ -252,11 +252,17 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "output/oidc-acceptance.json" in workflow
     assert "authorization_code_pkce" in workflow
     assert "[REDACTED]" in workflow
+    assert '--raw run-code --filename scripts/oidc_browser_acceptance.js' in workflow
+    assert 'json.loads(os.environ["OIDC_BROWSER_RESULT"])' in workflow
+    assert "OIDC acceptance failed at {stage} on {page_path}" in workflow
     oidc_acceptance = (ROOT / "scripts" / "oidc_browser_acceptance.js").read_text(
         encoding="utf-8"
     )
     assert "new URL(page.url())" not in oidc_acceptance
     assert "new URL(window.location.href)" in oidc_acceptance
+    assert "status: 'passed'" in oidc_acceptance
+    assert "status: 'failed'" in oidc_acceptance
+    assert "page_path: pagePath" in oidc_acceptance
     assert "EXPORT_STALE_MINUTES: 1" in workflow
     assert "EXPORT_LEASE_HEARTBEAT_SECONDS: 5" in workflow
     assert "20260810_0009 (head)" in workflow
