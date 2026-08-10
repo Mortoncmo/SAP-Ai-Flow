@@ -29,13 +29,16 @@ async page => {
     stage = 'starting authorization code flow'
     await signIn.click()
     await page.waitForURL(url => url.href.startsWith(`${oidcOrigin}/ci/authorize`))
-    const authorization = new URL(page.url())
-    assert(authorization.searchParams.get('response_type') === 'code', 'OIDC did not use code flow')
-    assert(authorization.searchParams.get('client_id') === 'sap-ai-flow-ci-web', 'OIDC client id mismatch')
-    assert(authorization.searchParams.get('code_challenge_method') === 'S256', 'PKCE method is not S256')
-    assert(Boolean(authorization.searchParams.get('code_challenge')), 'PKCE code challenge is missing')
+    const authorization = await page.evaluate(() => {
+      const currentUrl = new URL(window.location.href)
+      return Object.fromEntries(currentUrl.searchParams.entries())
+    })
+    assert(authorization.response_type === 'code', 'OIDC did not use code flow')
+    assert(authorization.client_id === 'sap-ai-flow-ci-web', 'OIDC client id mismatch')
+    assert(authorization.code_challenge_method === 'S256', 'PKCE method is not S256')
+    assert(Boolean(authorization.code_challenge), 'PKCE code challenge is missing')
     assert(
-      authorization.searchParams.get('redirect_uri') === `${appOrigin}/auth/callback`,
+      authorization.redirect_uri === `${appOrigin}/auth/callback`,
       'OIDC redirect URI mismatch',
     )
 
