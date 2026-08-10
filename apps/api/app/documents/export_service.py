@@ -2,6 +2,7 @@ import logging
 import re
 from datetime import UTC, datetime
 from threading import Event, Thread
+from time import sleep
 
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session
@@ -235,6 +236,7 @@ def process_export_job(
     stale_minutes: int,
     heartbeat_seconds: float,
     artifact_store: ArtifactStore | None = None,
+    acceptance_render_delay_seconds: float = 0,
 ) -> bool:
     claim_token: str | None = None
     attempt_count: int | None = None
@@ -266,6 +268,14 @@ def process_export_job(
             )
             heartbeat.start()
             try:
+                if acceptance_render_delay_seconds:
+                    log_event(
+                        logging.INFO,
+                        "export_job.acceptance_delay",
+                        export_id=export_id,
+                        delay_seconds=acceptance_render_delay_seconds,
+                    )
+                    sleep(acceptance_render_delay_seconds)
                 content, media_type, extension = render_export(model, job.format)
             finally:
                 heartbeat.stop()

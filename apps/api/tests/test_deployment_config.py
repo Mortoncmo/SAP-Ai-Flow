@@ -32,6 +32,7 @@ def test_compose_requires_database_password_and_keeps_api_internal():
     alert_receiver = compose["services"]["alert-drill-receiver"]
 
     assert "sap_blueprint_dev" not in raw
+    assert "EXPORT_ACCEPTANCE_RENDER_DELAY_SECONDS" not in raw
     assert "${POSTGRES_PASSWORD:?" in postgres["environment"]["POSTGRES_PASSWORD"]
     assert "${POSTGRES_PASSWORD:?" in api["environment"]["DATABASE_URL"]
     assert api["environment"]["EXPORT_RETENTION_HOURS"] == "${EXPORT_RETENTION_HOURS:-24}"
@@ -236,6 +237,8 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "pg_dump --clean --if-exists --no-owner" in workflow
     assert "sap_blueprint_restore" in workflow
     assert "OIDC_ALLOWED_TENANT_IDS: ci-tenant" in workflow
+    assert "EXPORT_STALE_MINUTES: 1" in workflow
+    assert "EXPORT_LEASE_HEARTBEAT_SECONDS: 5" in workflow
     assert "20260810_0009 (head)" in workflow
     assert 'test "$restored_head" = "20260810_0009"' in workflow
     assert workflow.count("aquasecurity/trivy-action@v0.36.0") == 4
@@ -260,6 +263,15 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "output/alertmanager-drill.json" in workflow
     assert "SapAiFlowAcceptanceDrill" in workflow
     assert "deployment-acceptance" in workflow
+    assert "Exercise rolling interruption recovery for a long DOCX task" in workflow
+    assert "export_worker_interruption_acceptance prepare" in workflow
+    assert "EXPORT_ACCEPTANCE_RENDER_DELAY_SECONDS=90" in workflow
+    assert "docker kill sap-ai-flow-interrupted-worker" in workflow
+    assert "sleep 65" in workflow
+    assert "export_worker_interruption_acceptance" in workflow
+    assert "output/export-worker-interruption.json" in workflow
+    assert "p['long_document_node_count']==80" in workflow
+    assert "p['interrupted_attempt_count']==2" in workflow
 
 
 def test_ci_renders_docx_with_libreoffice_poppler_and_chinese_fonts():

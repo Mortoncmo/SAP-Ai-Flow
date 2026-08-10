@@ -38,6 +38,9 @@ class ExportJobWorker:
                 stale_minutes=self.settings.export_stale_minutes,
                 heartbeat_seconds=self.settings.export_lease_heartbeat_seconds,
                 artifact_store=self.artifact_store,
+                acceptance_render_delay_seconds=(
+                    self.settings.export_acceptance_render_delay_seconds
+                ),
             ):
                 claimed += 1
         return claimed

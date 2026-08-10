@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     export_worker_poll_seconds: float = Field(default=1.0, ge=0.1, le=60)
     export_worker_batch_size: int = Field(default=8, ge=1, le=100)
     export_lease_heartbeat_seconds: float = Field(default=30.0, ge=0.1, le=60)
+    export_acceptance_render_delay_seconds: float = Field(default=0.0, ge=0, le=120)
     export_storage_backend: Literal["database", "filesystem", "s3"] = "database"
     export_storage_path: str = "../../output/exports"
     export_s3_bucket: str = ""
@@ -124,6 +125,10 @@ class Settings(BaseSettings):
             )
         if self.export_s3_prefix.startswith("/") or ".." in self.export_s3_prefix.split("/"):
             raise ValueError("EXPORT_S3_PREFIX must be a relative object prefix")
+        if self.export_acceptance_render_delay_seconds and self.app_env != "acceptance":
+            raise ValueError(
+                "EXPORT_ACCEPTANCE_RENDER_DELAY_SECONDS is only allowed in acceptance mode"
+            )
         return self
 
     @property

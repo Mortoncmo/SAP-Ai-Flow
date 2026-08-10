@@ -82,6 +82,8 @@ jobs:
       OIDC_AUDIENCE: sap-ai-flow-ci
       OIDC_JWKS_URL: https://ci.invalid/.well-known/jwks.json
       OIDC_ALLOWED_TENANT_IDS: ci-tenant
+      EXPORT_STALE_MINUTES: 1
+      EXPORT_LEASE_HEARTBEAT_SECONDS: 5
       VITE_OIDC_AUTHORITY: https://ci.invalid
       VITE_OIDC_CLIENT_ID: sap-ai-flow-ci-web
       VITE_OIDC_REDIRECT_URI: http://localhost:8080/auth/callback
@@ -227,6 +229,39 @@ jobs:
             python -m app.workers.export_worker_acceptance \
             | tee output/export-worker-acceptance.json
           python -c "import json; p=json.load(open('output/export-worker-acceptance.json')); assert p['status']=='passed' and p['database_backend']=='postgresql' and p['export_execution']=='worker' and p['artifact_storage']=='filesystem' and p['database_content_empty'] is True and p['parallel_job_count']==12 and p['exactly_once_job_count']==12 and p['stale_attempt_count']==2 and p['stale_write_rejected'] is True and p['fresh_heartbeat_preserved'] is True, p"
+      - name: Exercise rolling interruption recovery for a long DOCX task
+        run: |
+          docker compose -f deploy/docker-compose.yml stop worker
+          docker compose -f deploy/docker-compose.yml exec -T api \
+            python -m app.workers.export_worker_interruption_acceptance prepare \
+            > output/export-worker-interruption-prepare.json
+          export_id="$(python -c "import json; print(json.load(open('output/export-worker-interruption-prepare.json'))['export_id'])")"
+          docker compose -f deploy/docker-compose.yml run -d --no-deps \
+            --name sap-ai-flow-interrupted-worker \
+            -e APP_ENV=acceptance \
+            -e EXPORT_ACCEPTANCE_RENDER_DELAY_SECONDS=90 \
+            worker
+          docker compose -f deploy/docker-compose.yml exec -T api \
+            python -m app.workers.export_worker_interruption_acceptance \
+              wait-running --export-id "$export_id" \
+            > output/export-worker-interruption-running.json
+          docker kill sap-ai-flow-interrupted-worker
+          docker rm sap-ai-flow-interrupted-worker
+          sleep 65
+          docker compose -f deploy/docker-compose.yml up -d --scale worker=1 worker
+          for attempt in {1..30}; do
+            worker_id="$(docker compose -f deploy/docker-compose.yml ps -q worker)"
+            if [ -n "$worker_id" ] && \
+              [ "$(docker inspect --format '{{.State.Health.Status}}' "$worker_id")" = "healthy" ]; then
+              break
+            fi
+            sleep 1
+          done
+          docker compose -f deploy/docker-compose.yml exec -T api \
+            python -m app.workers.export_worker_interruption_acceptance \
+              verify --export-id "$export_id" \
+            | tee output/export-worker-interruption.json
+          python -c "import json; p=json.load(open('output/export-worker-interruption.json')); assert p['status']=='passed' and p['database_backend']=='postgresql' and p['artifact_storage']=='filesystem' and p['long_document_node_count']==80 and p['interrupted_attempt_count']==2 and p['replacement_completed'] is True and p['database_content_empty'] is True and p['content_length']>10000, p"
       - name: Exercise PostgreSQL backup and restore
         run: |
           docker compose -f deploy/docker-compose.yml exec -T postgres \
@@ -254,6 +289,7 @@ jobs:
             output/alembic-current.txt
             output/alertmanager-drill.json
             output/export-worker-acceptance.json
+            output/export-worker-interruption.json
           if-no-files-found: warn
           retention-days: 14
       - name: Show Compose diagnostics on failure

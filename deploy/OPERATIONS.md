@@ -104,6 +104,7 @@ EXPORT_S3_SECRET_ACCESS_KEY=
 - Worker 每轮都会把到期任务转为 `expired`。数据库后端会清空 `content`；文件系统/S3 后端先删除对象，再清空 `artifact_key`、SHA-256 和长度元数据。对象删除失败时保留引用并在下一轮重试，任务状态仍保持 `expired`，不会重新开放下载。低流量实例也会按轮询周期清理，但仍必须监控 `export_job` 表容量、存储容量、失败率、陈旧接管次数、对象删除失败次数和平均渲染时长。
 - 可以启动多个 Worker；目标业务负载下的并发吞吐、进程滚动重启、五分钟以上长文档和批量上限仍必须在目标 PostgreSQL 环境验证后才能确定实例数、轮询周期和陈旧阈值。
 - GitHub Compose 基线已扩容到两个健康 Worker，并以 12 个普通任务验证 `attempt_count=1`，以 1 个预置陈旧任务验证 `attempt_count=2` 和旧 Token 写回拒绝，再以开始时间已旧但心跳新鲜的任务验证不会被接管。该门禁证明租约正确性，不替代目标工作负载的吞吐量和长文档中断恢复结论。
+- GitHub Compose 进一步创建 80 节点 DOCX 任务，等待第一个 Worker 的心跳推进后使用 `docker kill` 强制中断容器，经过真实 1 分钟陈旧窗口后启动替代 Worker，并要求任务以 `attempt_count=2` 完成、PostgreSQL 二进制为空、外部交付物为有效 DOCX。`EXPORT_ACCEPTANCE_RENDER_DELAY_SECONDS` 只允许 `APP_ENV=acceptance`，用于给中断操作提供确定窗口；生产模式非零配置会被拒绝。该演练证明进程级中断、租约过期和恢复路径，目标环境仍需使用代表性最大文档、实际实例资源和滚动发布控制器复跑。
 - Worker 结构化日志只允许记录 `export_id`、尝试次数、结果和异常类型，不得记录蓝图正文、Prompt、认证信息或客户业务数据。
 - 开发环境可用 `database` 后端将短期二进制保存在 SQLite/PostgreSQL；生产环境必须使用 `filesystem` 或 `s3`，应用数据库只保存对象后端、对象键、长度和 SHA-256。`filesystem` 使用 API/Worker 共享的 `export-data` 卷，目录由非 root `app` 用户写入且对象文件按 0600 创建；`s3` 使用配置的 bucket/prefix、服务端 AES-256 加密和租约 Token 专属对象键。S3 运行身份至少需要目标 prefix 的 `PutObject`、`GetObject`、`DeleteObject` 和 bucket 健康检查权限，正式交付物还必须配置对象生命周期、版本化/保留和备份策略。
 
