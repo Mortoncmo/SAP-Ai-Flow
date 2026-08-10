@@ -263,6 +263,9 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "status: 'passed'" in oidc_acceptance
     assert "status: 'failed'" in oidc_acceptance
     assert "page_path: pagePath" in oidc_acceptance
+    assert "page.once('dialog'" in oidc_acceptance
+    assert "prompt.accept(projectName)" in oidc_acceptance
+    assert "output/oidc-failure.png" in oidc_acceptance
     assert "EXPORT_STALE_MINUTES: 1" in workflow
     assert "EXPORT_LEASE_HEARTBEAT_SECONDS: 5" in workflow
     assert "20260810_0009 (head)" in workflow
@@ -273,7 +276,12 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert workflow.count("actions/checkout@v5") == 4
     assert workflow.count("actions/setup-python@v6") == 2
     assert "actions/setup-node@v5" in workflow
-    assert workflow.count("actions/upload-artifact@v7") == 3
+    assert workflow.count("actions/upload-artifact@v7") == 4
+    assert "Upload OIDC browser failure evidence" in workflow
+    assert "tracing-start" in workflow
+    assert "tracing-stop" in workflow
+    assert ".playwright-cli/traces" in workflow
+    assert "output/oidc-failure.png" in workflow
     assert "severity: CRITICAL" in workflow
     assert "ignore-unfixed: true" in workflow
     assert 'exit-code: "1"' in workflow

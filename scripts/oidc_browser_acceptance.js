@@ -58,16 +58,29 @@ async page => {
     assert(tokenRequestBody.includes('code_verifier='), 'PKCE code verifier was not sent')
 
     stage = 'calling protected tenant-scoped API'
-    const createResponsePromise = page.waitForResponse(response => (
-      response.url() === `${appOrigin}/api/v1/projects`
-      && response.request().method() === 'POST'
-    ))
-    const promptPromise = page.waitForEvent('dialog')
-    await page.getByRole('button', { name: '\u65b0\u5efa\u9879\u76ee' }).click()
-    const prompt = await promptPromise
-    assert(prompt.type() === 'prompt', 'new project did not use the expected prompt')
-    await prompt.accept(projectName)
-    const createResponse = await createResponsePromise
+    const createButton = page.getByRole('button', { name: '\u65b0\u5efa\u9879\u76ee' })
+    await createButton.waitFor()
+    assert(await createButton.isEnabled(), 'new project button remained disabled after login')
+    const promptHandled = new Promise((resolve, reject) => {
+      page.once('dialog', async prompt => {
+        try {
+          assert(prompt.type() === 'prompt', 'new project did not use the expected prompt')
+          await prompt.accept(projectName)
+          resolve()
+        } catch (error) {
+          await prompt.dismiss().catch(() => undefined)
+          reject(error)
+        }
+      })
+    })
+    const [createResponse] = await Promise.all([
+      page.waitForResponse(response => (
+        response.url() === `${appOrigin}/api/v1/projects`
+        && response.request().method() === 'POST'
+      )),
+      promptHandled,
+      createButton.click(),
+    ])
     assert(createResponse.status() === 201, `protected project API returned ${createResponse.status()}`)
     const authorizationHeader = (await createResponse.request().allHeaders()).authorization ?? ''
     assert(authorizationHeader.startsWith('Bearer '), 'protected API request omitted Bearer token')
@@ -93,6 +106,8 @@ async page => {
   } catch (error) {
     const pagePath = await page.evaluate(() => `${window.location.origin}${window.location.pathname}`)
       .catch(() => 'unavailable')
+    await page.screenshot({ path: 'output/oidc-failure.png', fullPage: true })
+      .catch(() => undefined)
     return {
       status: 'failed',
       stage,
