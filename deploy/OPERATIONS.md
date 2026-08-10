@@ -13,7 +13,19 @@ docker compose -f .\deploy\docker-compose.yml up -d api worker web
 Invoke-WebRequest http://localhost:8080/health/ready
 ```
 
-通过 Web 入口访问 `/health/ready`；它会检查认证/Provider/导出执行模式、数据库连接和交付物存储可用性。只有返回 `200`、`status=ok`、`database=ready`、`artifact_storage_status=ready` 且 `export_execution=worker` 后才允许写入项目。生产环境 `EXPORT_STORAGE_BACKEND=database` 会被 readiness 拒绝。再运行 `docker compose -f .\deploy\docker-compose.yml ps`，确认 PostgreSQL、API、Worker 和 Web 都为健康状态。API 的 8000 端口仅在 Compose 网络内暴露，不应绕过 Nginx 直接发布到宿主机或外部负载均衡器。
+通过 Web 入口访问 `/health/ready`；它会检查认证/Provider/租户 allowlist/导出执行模式、数据库连接和交付物存储可用性。只有返回 `200`、`status=ok`、`tenant_isolation=oidc_claim_allowlist`、`database=ready`、`artifact_storage_status=ready` 且 `export_execution=worker` 后才允许写入项目。生产环境 `EXPORT_STORAGE_BACKEND=database` 会被 readiness 拒绝。再运行 `docker compose -f .\deploy\docker-compose.yml ps`，确认 PostgreSQL、API、Worker 和 Web 都为健康状态。API 的 8000 端口仅在 Compose 网络内暴露，不应绕过 Nginx 直接发布到宿主机或外部负载均衡器。
+
+## OIDC 租户映射
+
+生产环境必须配置 `OIDC_TENANT_ID_CLAIM` 和逗号分隔的 `OIDC_ALLOWED_TENANT_IDS`。API 只接受 allowlist 中的租户，并在项目创建时固化当前租户；成员管理只能向当前项目所属租户添加用户标识，不接受客户端传入租户。
+
+0009 迁移会把存量项目的 `tenant_id` 回填为 `local`。升级已有生产数据库时，必须先备份并由项目负责人确认每个项目对应的目标 IdP 租户，再在开放流量前将 `local` 更新为已批准的真实 tenant ID；多租户数据必须逐项目映射，不能批量假定为同一租户。迁移后执行：
+
+```sql
+SELECT tenant_id, COUNT(*) FROM project GROUP BY tenant_id ORDER BY tenant_id;
+```
+
+结果中不得残留 `local`，也不要把 `local` 加入生产 allowlist 绕过映射。随后分别使用两个租户中 subject 相同的测试账号验证：本租户项目可列出，另一租户项目列表不可见且按 ID 访问返回 404。
 
 ## 外部模型调用缓存
 

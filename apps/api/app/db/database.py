@@ -41,6 +41,20 @@ class Database:
                         "BOOLEAN NOT NULL DEFAULT 0"
                     )
                 )
+        if "project" in tables and "tenant_id" not in project_columns:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE project ADD COLUMN tenant_id "
+                        "VARCHAR(80) NOT NULL DEFAULT 'local'"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_project_tenant_id "
+                        "ON project (tenant_id)"
+                    )
+                )
         if "export_job" not in tables:
             return
         export_columns = {

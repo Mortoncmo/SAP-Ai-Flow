@@ -505,6 +505,7 @@ def test_local_schema_backfills_legacy_project_owner_membership(persistence_clie
         session.add(
             ProjectRecord(
                 id="legacy-project",
+                tenant_id="local",
                 name="旧版开发项目",
                 customer_name=None,
                 sap_context=SapContext().model_dump(mode="json"),

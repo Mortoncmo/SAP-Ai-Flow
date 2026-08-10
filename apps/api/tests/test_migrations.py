@@ -32,6 +32,8 @@ def test_initial_migration_upgrades_and_downgrades_empty_sqlite(tmp_path, monkey
             set(inspect(engine).get_table_names())
         )
         export_columns = {column["name"] for column in inspect(engine).get_columns("export_job")}
+        project_columns = {column["name"] for column in inspect(engine).get_columns("project")}
+        assert "tenant_id" in project_columns
         assert {
             "claim_token",
             "attempt_count",
@@ -106,6 +108,8 @@ def test_sqlite_development_startup_upgrades_existing_export_jobs(tmp_path, monk
         command.upgrade(config, "20260809_0005")
         database = Database(database_url, create_schema=True)
         inspector = inspect(database.engine)
+        project_columns = {column["name"] for column in inspector.get_columns("project")}
+        project_indexes = {index["name"] for index in inspector.get_indexes("project")}
         columns = {column["name"] for column in inspector.get_columns("export_job")}
         indexes = {index["name"] for index in inspector.get_indexes("export_job")}
         assert {
@@ -119,6 +123,8 @@ def test_sqlite_development_startup_upgrades_existing_export_jobs(tmp_path, monk
         assert "ix_export_job_status_created_at" in indexes
         assert "ix_export_job_status_heartbeat_at" in indexes
         assert "ix_export_job_status_expires_at" in indexes
+        assert "tenant_id" in project_columns
+        assert "ix_project_tenant_id" in project_indexes
         database.engine.dispose()
     finally:
         get_settings.cache_clear()
@@ -158,6 +164,7 @@ def test_project_member_migration_backfills_existing_project_owner(tmp_path, mon
         inspector = inspect(engine)
         project_columns = {column["name"] for column in inspector.get_columns("project")}
         assert "external_model_enabled" in project_columns
+        assert "tenant_id" in project_columns
         assert "project_audit_log" in inspector.get_table_names()
         with engine.connect() as connection:
             member = connection.execute(
@@ -177,8 +184,13 @@ def test_project_member_migration_backfills_existing_project_owner(tmp_path, mon
                 ),
                 {"project_id": "project-existing"},
             ).scalar_one()
+            tenant_id = connection.execute(
+                text("SELECT tenant_id FROM project WHERE id = :project_id"),
+                {"project_id": "project-existing"},
+            ).scalar_one()
         assert member == ("owner-existing", "project_admin", "owner-existing")
         assert external_model_enabled in (False, 0)
+        assert tenant_id == "local"
         engine.dispose()
     finally:
         get_settings.cache_clear()

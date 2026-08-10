@@ -47,6 +47,8 @@ def production_settings(**overrides: object) -> Settings:
         "oidc_jwks_url": JWKS_URL,
         "oidc_algorithms": ["RS256"],
         "oidc_user_id_claim": "sub",
+        "oidc_tenant_id_claim": "tid",
+        "oidc_allowed_tenant_ids": ["tenant-alpha"],
         "oidc_clock_skew_seconds": 0,
         "export_execution_mode": "worker",
         "export_storage_backend": "filesystem",
@@ -60,6 +62,7 @@ def encode_token(private_key, **overrides: object) -> str:
     now = datetime.now(UTC)
     claims: dict[str, object] = {
         "sub": "consultant-user",
+        "tid": "tenant-alpha",
         "iss": ISSUER,
         "aud": AUDIENCE,
         "iat": now,
@@ -82,7 +85,9 @@ def test_development_identity_keeps_local_header_support():
     )
 
     assert default_user.user_id == "local-user"
+    assert default_user.tenant_id == "local"
     assert explicit_user.user_id == "developer-user"
+    assert explicit_user.tenant_id == "local"
 
 
 def test_production_rejects_spoofed_development_header():
@@ -117,6 +122,7 @@ def test_valid_signed_token_resolves_stable_user_id(signing_keys):
     )
 
     assert context.user_id == "consultant-user"
+    assert context.tenant_id == "tenant-alpha"
 
 
 @pytest.mark.parametrize(
@@ -126,12 +132,25 @@ def test_valid_signed_token_resolves_stable_user_id(signing_keys):
         {"iss": "https://wrong-issuer.example.test"},
         {"aud": "wrong-audience"},
         {"sub": ""},
+        {"tid": ""},
     ],
 )
 def test_invalid_token_claims_are_rejected(signing_keys, overrides):
     with pytest.raises(FlowchartError) as caught:
         auth.get_user_context(
             credentials=credentials(encode_token(signing_keys, **overrides)),
+            x_user_id=None,
+            settings=production_settings(),
+        )
+
+    assert caught.value.status_code == 401
+    assert caught.value.code == "INVALID_ACCESS_TOKEN"
+
+
+def test_tenant_claim_must_be_explicitly_allowed(signing_keys):
+    with pytest.raises(FlowchartError) as caught:
+        auth.get_user_context(
+            credentials=credentials(encode_token(signing_keys, tid="tenant-beta")),
             x_user_id=None,
             settings=production_settings(),
         )
@@ -171,6 +190,62 @@ def test_project_route_uses_bearer_identity_in_production(signing_keys):
     assert spoofed.status_code == 401
     assert spoofed.json()["error"]["code"] == "UNAUTHENTICATED"
     assert authorized.status_code == 200
+
+
+def test_projects_are_isolated_by_oidc_tenant_even_for_the_same_subject(signing_keys):
+    settings = production_settings(oidc_allowed_tenant_ids=["tenant-alpha", "tenant-beta"])
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        with TestClient(app) as client:
+            alpha_headers = {
+                "Authorization": f"Bearer {encode_token(signing_keys, tid='tenant-alpha')}"
+            }
+            beta_headers = {
+                "Authorization": f"Bearer {encode_token(signing_keys, tid='tenant-beta')}"
+            }
+            created = client.post(
+                "/api/v1/projects",
+                json={"name": "Tenant Alpha Project", "sap_context": {}},
+                headers=alpha_headers,
+            )
+            project_id = created.json()["id"]
+            process = client.post(
+                f"/api/v1/projects/{project_id}/processes",
+                json={"name": "Tenant Alpha Process", "module": "MM", "process_scope": "P2P"},
+                headers=alpha_headers,
+            )
+            process_id = process.json()["id"]
+
+            alpha_projects = client.get("/api/v1/projects", headers=alpha_headers)
+            beta_projects = client.get("/api/v1/projects", headers=beta_headers)
+            hidden = client.get(f"/api/v1/projects/{project_id}", headers=beta_headers)
+            hidden_process = client.get(
+                f"/api/v1/processes/{process_id}",
+                headers=beta_headers,
+            )
+            hidden_knowledge = client.post(
+                f"/api/v1/projects/{project_id}/knowledge/search",
+                json={
+                    "module": "MM",
+                    "process_scope": "P2P",
+                    "query": "采购审批",
+                    "sap_context": {},
+                    "top_k": 3,
+                },
+                headers=beta_headers,
+            )
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+    assert created.status_code == 201
+    assert any(item["id"] == project_id for item in alpha_projects.json())
+    assert all(item["id"] != project_id for item in beta_projects.json())
+    assert hidden.status_code == 404
+    assert hidden.json()["error"]["code"] == "PROJECT_NOT_FOUND"
+    assert hidden_process.status_code == 404
+    assert hidden_process.json()["error"]["code"] == "PROJECT_NOT_FOUND"
+    assert hidden_knowledge.status_code == 404
+    assert hidden_knowledge.json()["error"]["code"] == "PROJECT_NOT_FOUND"
 
 
 def test_development_only_routes_are_hidden_in_production(order_graph):
@@ -237,12 +312,28 @@ def test_readiness_requires_oidc_configuration_in_production():
         "status": "ok",
         "provider": "local",
         "authentication": "oidc",
+        "tenant_isolation": "oidc_claim_allowlist",
         "database": "ready",
         "database_backend": "sqlite",
         "export_execution": "worker",
         "artifact_storage": "filesystem",
         "artifact_storage_status": "ready",
     }
+
+
+def test_readiness_requires_an_explicit_tenant_allowlist_in_production():
+    app.dependency_overrides[get_settings] = lambda: production_settings(
+        oidc_allowed_tenant_ids=[]
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.get("/health/ready")
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "not_ready"
+    assert response.json()["tenant_isolation"] == "oidc_claim_allowlist"
 
 
 def test_readiness_rejects_inline_export_execution_in_production():

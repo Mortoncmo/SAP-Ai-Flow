@@ -30,6 +30,7 @@ ROLE_RANK = {
 @dataclass(frozen=True)
 class UserContext:
     user_id: str
+    tenant_id: str
 
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -44,7 +45,7 @@ def get_user_context(
         user_id = (x_user_id or "local-user").strip()
         if not user_id:
             raise _unauthenticated()
-        return UserContext(user_id=user_id)
+        return UserContext(user_id=user_id, tenant_id=settings.development_tenant_id)
 
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise _unauthenticated()
@@ -56,10 +57,13 @@ def get_user_context(
         )
 
     claims = _decode_access_token(credentials.credentials, settings)
-    user_id = str(claims.get(settings.oidc_user_id_claim, "")).strip()
-    if not user_id or len(user_id) > 80:
+    user_id = _identity_claim(claims, settings.oidc_user_id_claim)
+    tenant_id = _identity_claim(claims, settings.oidc_tenant_id_claim)
+    if user_id is None or tenant_id is None:
         raise _invalid_token()
-    return UserContext(user_id=user_id)
+    if tenant_id not in settings.oidc_allowed_tenant_ids:
+        raise _invalid_token()
+    return UserContext(user_id=user_id, tenant_id=tenant_id)
 
 
 def _decode_access_token(token: str, settings: Settings) -> dict[str, object]:
@@ -72,10 +76,31 @@ def _decode_access_token(token: str, settings: Settings) -> dict[str, object]:
             audience=settings.oidc_audience.strip(),
             issuer=settings.oidc_issuer.strip(),
             leeway=settings.oidc_clock_skew_seconds,
-            options={"require": ["exp", "iat", settings.oidc_user_id_claim]},
+            options={
+                "require": [
+                    "exp",
+                    "iat",
+                    settings.oidc_user_id_claim,
+                    settings.oidc_tenant_id_claim,
+                ]
+            },
         )
     except (PyJWTError, PyJWKClientError, ValueError, TypeError) as exc:
         raise _invalid_token() from exc
+
+
+def _identity_claim(claims: dict[str, object], claim_name: str) -> str | None:
+    value = claims.get(claim_name)
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if (
+        not normalized
+        or len(normalized) > 80
+        or any(ord(character) < 32 or ord(character) == 127 for character in normalized)
+    ):
+        return None
+    return normalized
 
 
 @lru_cache(maxsize=8)

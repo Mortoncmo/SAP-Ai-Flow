@@ -81,6 +81,7 @@ jobs:
       OIDC_ISSUER: https://ci.invalid
       OIDC_AUDIENCE: sap-ai-flow-ci
       OIDC_JWKS_URL: https://ci.invalid/.well-known/jwks.json
+      OIDC_ALLOWED_TENANT_IDS: ci-tenant
       VITE_OIDC_AUTHORITY: https://ci.invalid
       VITE_OIDC_CLIENT_ID: sap-ai-flow-ci-web
       VITE_OIDC_REDIRECT_URI: http://localhost:8080/auth/callback
@@ -145,11 +146,11 @@ jobs:
           exit 1
       - name: Verify readiness and migration head
         run: |
-          python -c "import json; p=json.load(open('output/readiness.json')); assert p['status']=='ok' and p['database']=='ready' and p['database_backend']=='postgresql' and p['export_execution']=='worker' and p['artifact_storage']=='filesystem' and p['artifact_storage_status']=='ready', p"
+          python -c "import json; p=json.load(open('output/readiness.json')); assert p['status']=='ok' and p['tenant_isolation']=='oidc_claim_allowlist' and p['database']=='ready' and p['database_backend']=='postgresql' and p['export_execution']=='worker' and p['artifact_storage']=='filesystem' and p['artifact_storage_status']=='ready', p"
           test "$(docker compose -f deploy/docker-compose.yml ps --status running --services | grep -c '^worker$')" = "1"
           docker compose -f deploy/docker-compose.yml exec -T api alembic current \
             | tee output/alembic-current.txt
-          grep -q '20260810_0008 (head)' output/alembic-current.txt
+          grep -q '20260810_0009 (head)' output/alembic-current.txt
       - name: Exercise PostgreSQL multi-worker fencing
         run: |
           docker compose -f deploy/docker-compose.yml up -d --scale worker=2 worker
@@ -184,7 +185,7 @@ jobs:
           restored_head="$(docker compose -f deploy/docker-compose.yml exec -T postgres \
             psql --username "$POSTGRES_USER" --dbname sap_blueprint_restore \
               --tuples-only --no-align --command 'SELECT version_num FROM alembic_version;')"
-          test "$restored_head" = "20260810_0008"
+          test "$restored_head" = "20260810_0009"
       - name: Show Compose diagnostics on failure
         if: failure()
         run: |

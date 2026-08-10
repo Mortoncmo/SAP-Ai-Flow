@@ -100,6 +100,7 @@ def create_project(
         customer_name=request.customer_name,
         sap_context=request.sap_context,
         user_id=user.user_id,
+        tenant_id=user.tenant_id,
     )
     return _project_response(project, ProjectRole.PROJECT_ADMIN)
 
@@ -112,9 +113,18 @@ def list_projects(
     return [
         _project_response(
             project,
-            ProjectRole(repository.require_project_member(project.id, user.user_id).role),
+            ProjectRole(
+                repository.require_project_member(
+                    project.id,
+                    user.user_id,
+                    tenant_id=user.tenant_id,
+                ).role
+            ),
         )
-        for project in repository.list_projects(user_id=user.user_id)
+        for project in repository.list_projects(
+            user_id=user.user_id,
+            tenant_id=user.tenant_id,
+        )
     ]
 
 
@@ -125,7 +135,13 @@ def get_project(
     user: UserContext = Depends(get_user_context),
 ) -> ProjectResponse:
     project = _authorize_project(repository, project_id, user, ProjectRole.VIEWER)
-    role = ProjectRole(repository.require_project_member(project_id, user.user_id).role)
+    role = ProjectRole(
+        repository.require_project_member(
+            project_id,
+            user.user_id,
+            tenant_id=user.tenant_id,
+        ).role
+    )
     return _project_response(project, role)
 
 
@@ -258,7 +274,11 @@ def list_processes(
     _authorize_project(repository, project_id, user, ProjectRole.VIEWER)
     return [
         _process_summary(process)
-        for process in repository.list_processes(project_id, user_id=user.user_id)
+        for process in repository.list_processes(
+            project_id,
+            user_id=user.user_id,
+            tenant_id=user.tenant_id,
+        )
     ]
 
 
@@ -309,7 +329,11 @@ async def modify_process(
     user: UserContext = Depends(get_user_context),
 ) -> PersistedModifyResponse:
     process = _authorize_process(repository, process_id, user, ProjectRole.EDITOR)
-    project = repository.require_project(process.project_id, user_id=user.user_id)
+    project = repository.require_project(
+        process.project_id,
+        user_id=user.user_id,
+        tenant_id=user.tenant_id,
+    )
     repository.ensure_current_revision(process, request.base_revision)
     current_graph = repository.current_graph(process)
     started = perf_counter()
@@ -375,7 +399,11 @@ def list_revisions(
     _authorize_process(repository, process_id, user, ProjectRole.VIEWER)
     return [
         _revision_response(revision)
-        for revision in repository.list_revisions(process_id, user_id=user.user_id)
+        for revision in repository.list_revisions(
+            process_id,
+            user_id=user.user_id,
+            tenant_id=user.tenant_id,
+        )
     ]
 
 
@@ -425,7 +453,11 @@ def create_release(
     user: UserContext = Depends(get_user_context),
 ) -> ReleaseResponse:
     process = _authorize_process(repository, process_id, user, ProjectRole.CONSULTANT_APPROVER)
-    project = repository.require_project(process.project_id, user_id=user.user_id)
+    project = repository.require_project(
+        process.project_id,
+        user_id=user.user_id,
+        tenant_id=user.tenant_id,
+    )
     _validate_release_graph(
         repository, project, process, repository.current_graph(process), request.base_revision
     )
@@ -541,7 +573,11 @@ def export_process(
     user: UserContext = Depends(get_user_context),
 ) -> Response:
     process = _authorize_process(repository, process_id, user, ProjectRole.VIEWER)
-    project = repository.require_project(process.project_id, user_id=user.user_id)
+    project = repository.require_project(
+        process.project_id,
+        user_id=user.user_id,
+        tenant_id=user.tenant_id,
+    )
     revision = repository.require_revision(process_id, request.revision_no)
     model = blueprint_document(project, process, revision)
     content, media_type, extension = render_export(model, request.format)
@@ -743,8 +779,16 @@ def _authorize_project(
     user: UserContext,
     minimum: ProjectRole,
 ) -> ProjectRecord:
-    project = repository.require_project(project_id, user_id=user.user_id)
-    member = repository.require_project_member(project_id, user.user_id)
+    project = repository.require_project(
+        project_id,
+        user_id=user.user_id,
+        tenant_id=user.tenant_id,
+    )
+    member = repository.require_project_member(
+        project_id,
+        user.user_id,
+        tenant_id=user.tenant_id,
+    )
     require_role(ProjectRole(member.role), minimum)
     return project
 
@@ -755,8 +799,16 @@ def _authorize_process(
     user: UserContext,
     minimum: ProjectRole,
 ) -> ProcessRecord:
-    process = repository.require_process(process_id, user_id=user.user_id)
-    member = repository.require_project_member(process.project_id, user.user_id)
+    process = repository.require_process(
+        process_id,
+        user_id=user.user_id,
+        tenant_id=user.tenant_id,
+    )
+    member = repository.require_project_member(
+        process.project_id,
+        user.user_id,
+        tenant_id=user.tenant_id,
+    )
     require_role(ProjectRole(member.role), minimum)
     return process
 

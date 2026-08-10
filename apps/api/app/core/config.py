@@ -51,7 +51,10 @@ class Settings(BaseSettings):
     oidc_jwks_url: str = ""
     oidc_algorithms: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["RS256"])
     oidc_user_id_claim: str = "sub"
+    oidc_tenant_id_claim: str = "tid"
+    oidc_allowed_tenant_ids: Annotated[list[str], NoDecode] = Field(default_factory=list)
     oidc_clock_skew_seconds: int = Field(default=30, ge=0, le=300)
+    development_tenant_id: str = Field(default="local", min_length=1, max_length=80)
     cors_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["http://localhost:5173", "http://localhost:8080"]
     )
@@ -69,6 +72,26 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [algorithm.strip().upper() for algorithm in value.split(",") if algorithm.strip()]
         return value
+
+    @field_validator("oidc_allowed_tenant_ids", mode="before")
+    @classmethod
+    def parse_oidc_allowed_tenant_ids(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [tenant_id.strip() for tenant_id in value.split(",") if tenant_id.strip()]
+        return value
+
+    @field_validator("oidc_allowed_tenant_ids")
+    @classmethod
+    def validate_oidc_allowed_tenant_ids(cls, value: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(tenant_id.strip() for tenant_id in value))
+        if any(
+            not tenant_id
+            or len(tenant_id) > 80
+            or any(ord(character) < 32 or ord(character) == 127 for character in tenant_id)
+            for tenant_id in normalized
+        ):
+            raise ValueError("OIDC_ALLOWED_TENANT_IDS contains an invalid tenant identifier")
+        return normalized
 
     @field_validator("oidc_algorithms")
     @classmethod
@@ -110,6 +133,8 @@ class Settings(BaseSettings):
             and self.oidc_audience.strip()
             and self.oidc_jwks_url.strip()
             and self.oidc_user_id_claim.strip()
+            and self.oidc_tenant_id_claim.strip()
+            and self.oidc_allowed_tenant_ids
         )
 
     @property

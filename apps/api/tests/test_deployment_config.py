@@ -46,6 +46,8 @@ def test_compose_requires_database_password_and_keeps_api_internal():
     assert api["environment"]["EXPORT_EXECUTION_MODE"] == "worker"
     assert api["environment"]["LLM_CACHE_TTL_SECONDS"] == "${LLM_CACHE_TTL_SECONDS:-60}"
     assert api["environment"]["LLM_CACHE_MAX_ENTRIES"] == "${LLM_CACHE_MAX_ENTRIES:-128}"
+    assert api["environment"]["OIDC_TENANT_ID_CLAIM"] == "${OIDC_TENANT_ID_CLAIM:-tid}"
+    assert api["environment"]["OIDC_ALLOWED_TENANT_IDS"] == "${OIDC_ALLOWED_TENANT_IDS:-}"
     assert api["image"] == "sap-ai-flow-api:${SAP_FLOW_IMAGE_TAG:-local}"
     assert web["image"] == "sap-ai-flow-web:${SAP_FLOW_IMAGE_TAG:-local}"
     assert "ports" not in api
@@ -75,11 +77,13 @@ def test_compose_requires_database_password_and_keeps_api_internal():
 
 def test_settings_accept_compose_list_environment_values(monkeypatch):
     monkeypatch.setenv("OIDC_ALGORITHMS", "RS256,ES256")
+    monkeypatch.setenv("OIDC_ALLOWED_TENANT_IDS", "tenant-a,tenant-b,tenant-a")
     monkeypatch.setenv("CORS_ORIGINS", "http://localhost:8080,https://flow.example.com")
 
     settings = Settings(_env_file=None)
 
     assert settings.oidc_algorithms == ["RS256", "ES256"]
+    assert settings.oidc_allowed_tenant_ids == ["tenant-a", "tenant-b"]
     assert settings.cors_origins == ["http://localhost:8080", "https://flow.example.com"]
 
 
@@ -114,6 +118,11 @@ def test_settings_require_complete_s3_credentials_and_safe_prefix():
     assert production_s3.export_storage_configured
 
 
+def test_settings_reject_invalid_tenant_identifiers():
+    with pytest.raises(ValidationError, match="invalid tenant identifier"):
+        Settings(_env_file=None, oidc_allowed_tenant_ids=["tenant-a\nforged"])
+
+
 def test_browser_smoke_passes_cors_origin_in_supported_format():
     script = (ROOT / "scripts" / "browser_smoke.ps1").read_text(encoding="utf-8")
 
@@ -143,6 +152,7 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "docker compose -f deploy/docker-compose.yml build" in workflow
     assert "http://127.0.0.1:8080/health/ready" in workflow
     assert "p['database_backend']=='postgresql'" in workflow
+    assert "p['tenant_isolation']=='oidc_claim_allowlist'" in workflow
     assert "p['export_execution']=='worker'" in workflow
     assert "p['artifact_storage']=='filesystem'" in workflow
     assert "p['artifact_storage_status']=='ready'" in workflow
@@ -160,8 +170,9 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "p['database_content_empty'] is True" in workflow
     assert "pg_dump --clean --if-exists --no-owner" in workflow
     assert "sap_blueprint_restore" in workflow
-    assert "20260810_0008 (head)" in workflow
-    assert 'test "$restored_head" = "20260810_0008"' in workflow
+    assert "OIDC_ALLOWED_TENANT_IDS: ci-tenant" in workflow
+    assert "20260810_0009 (head)" in workflow
+    assert 'test "$restored_head" = "20260810_0009"' in workflow
     assert workflow.count("aquasecurity/trivy-action@v0.36.0") == 4
     assert "output/sap-ai-flow-api.cdx.json" in workflow
     assert "output/sap-ai-flow-web.cdx.json" in workflow

@@ -29,6 +29,7 @@ class ProjectRecord(Base):
     __tablename__ = "project"
 
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     customer_name: Mapped[str | None] = mapped_column(String(100))
     sap_context: Mapped[dict[str, object]] = mapped_column(JSON_DOCUMENT, nullable=False)

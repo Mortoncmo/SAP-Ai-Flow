@@ -46,6 +46,7 @@ def main() -> int:
                 customer_name=None,
                 sap_context=SapContext(),
                 user_id=user_id,
+                tenant_id="ci",
             )
             project_id = project.id
             graph = GraphDocument(

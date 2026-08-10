@@ -71,6 +71,14 @@ def analyze_project_gap(
 def _require_editor(
     repository: BlueprintRepository, project_id: str, user: UserContext
 ) -> None:
-    repository.require_project(project_id, user_id=user.user_id)
-    membership = repository.require_project_member(project_id, user.user_id)
+    repository.require_project(
+        project_id,
+        user_id=user.user_id,
+        tenant_id=user.tenant_id,
+    )
+    membership = repository.require_project_member(
+        project_id,
+        user.user_id,
+        tenant_id=user.tenant_id,
+    )
     require_role(ProjectRole(membership.role), ProjectRole.EDITOR)

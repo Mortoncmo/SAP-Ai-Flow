@@ -33,6 +33,7 @@ def test_readiness_returns_safe_503_when_database_is_unavailable():
         "status": "not_ready",
         "provider": "local",
         "authentication": "development",
+        "tenant_isolation": "development",
         "database": "unavailable",
         "database_backend": "sqlite",
         "export_execution": "inline",

@@ -33,10 +33,12 @@ class BlueprintRepository:
         customer_name: str | None,
         sap_context: SapContext,
         user_id: str,
+        tenant_id: str,
         external_model_enabled: bool = False,
     ) -> ProjectRecord:
         project = ProjectRecord(
             id=new_id("project"),
+            tenant_id=tenant_id,
             name=name,
             customer_name=customer_name,
             sap_context=sap_context.model_dump(mode="json"),
@@ -108,29 +110,44 @@ class BlueprintRepository:
             )
         )
 
-    def list_projects(self, *, user_id: str) -> list[ProjectRecord]:
-        self._backfill_legacy_owner_memberships(user_id)
+    def list_projects(self, *, user_id: str, tenant_id: str) -> list[ProjectRecord]:
+        self._backfill_legacy_owner_memberships(user_id, tenant_id)
         query = (
             select(ProjectRecord)
             .join(ProjectMemberRecord, ProjectMemberRecord.project_id == ProjectRecord.id)
-            .where(ProjectMemberRecord.user_id == user_id)
+            .where(
+                ProjectMemberRecord.user_id == user_id,
+                ProjectRecord.tenant_id == tenant_id,
+            )
             .order_by(ProjectRecord.created_at)
         )
         return list(self.session.scalars(query))
 
-    def require_project(self, project_id: str, *, user_id: str | None = None) -> ProjectRecord:
+    def require_project(
+        self,
+        project_id: str,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> ProjectRecord:
         project = self.session.get(ProjectRecord, project_id)
-        if project is None:
+        if project is None or (tenant_id is not None and project.tenant_id != tenant_id):
             raise FlowchartError(
                 "PROJECT_NOT_FOUND", "项目不存在。", status_code=404, details={"project_id": project_id}
             )
         if user_id is not None:
-            self.require_project_member(project_id, user_id)
+            self.require_project_member(project_id, user_id, tenant_id=tenant_id)
         return project
 
-    def require_project_member(self, project_id: str, user_id: str) -> ProjectMemberRecord:
+    def require_project_member(
+        self,
+        project_id: str,
+        user_id: str,
+        *,
+        tenant_id: str | None = None,
+    ) -> ProjectMemberRecord:
         project = self.session.get(ProjectRecord, project_id)
-        if project is None:
+        if project is None or (tenant_id is not None and project.tenant_id != tenant_id):
             raise FlowchartError(
                 "PROJECT_NOT_FOUND", "项目不存在。", status_code=404, details={"project_id": project_id}
             )
@@ -162,7 +179,7 @@ class BlueprintRepository:
             )
         return member
 
-    def _backfill_legacy_owner_memberships(self, user_id: str) -> None:
+    def _backfill_legacy_owner_memberships(self, user_id: str, tenant_id: str) -> None:
         legacy_projects = self.session.scalars(
             select(ProjectRecord)
             .outerjoin(
@@ -171,6 +188,7 @@ class BlueprintRepository:
             )
             .where(
                 ProjectRecord.created_by == user_id,
+                ProjectRecord.tenant_id == tenant_id,
                 ProjectMemberRecord.project_id.is_(None),
             )
         )
@@ -335,8 +353,10 @@ class BlueprintRepository:
         self._commit()
         return process, revision
 
-    def list_processes(self, project_id: str, *, user_id: str) -> list[ProcessRecord]:
-        self.require_project(project_id, user_id=user_id)
+    def list_processes(
+        self, project_id: str, *, user_id: str, tenant_id: str
+    ) -> list[ProcessRecord]:
+        self.require_project(project_id, user_id=user_id, tenant_id=tenant_id)
         query = (
             select(ProcessRecord)
             .where(ProcessRecord.project_id == project_id)
@@ -344,14 +364,20 @@ class BlueprintRepository:
         )
         return list(self.session.scalars(query))
 
-    def require_process(self, process_id: str, *, user_id: str | None = None) -> ProcessRecord:
+    def require_process(
+        self,
+        process_id: str,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> ProcessRecord:
         process = self.session.get(ProcessRecord, process_id)
         if process is None:
             raise FlowchartError(
                 "PROCESS_NOT_FOUND", "流程不存在。", status_code=404, details={"process_id": process_id}
             )
         if user_id is not None:
-            self.require_project(process.project_id, user_id=user_id)
+            self.require_project(process.project_id, user_id=user_id, tenant_id=tenant_id)
         return process
 
     def require_revision(self, process_id: str, revision_no: int) -> ProcessRevisionRecord:
@@ -428,8 +454,14 @@ class BlueprintRepository:
         )
         return decision_id is not None
 
-    def list_revisions(self, process_id: str, *, user_id: str | None = None) -> list[ProcessRevisionRecord]:
-        self.require_process(process_id, user_id=user_id)
+    def list_revisions(
+        self,
+        process_id: str,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> list[ProcessRevisionRecord]:
+        self.require_process(process_id, user_id=user_id, tenant_id=tenant_id)
         query = (
             select(ProcessRevisionRecord)
             .where(ProcessRevisionRecord.process_id == process_id)

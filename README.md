@@ -202,6 +202,8 @@ OIDC_AUDIENCE=sap-ai-flow
 OIDC_JWKS_URL=https://identity.example.com/.well-known/jwks.json
 OIDC_ALGORITHMS=RS256
 OIDC_USER_ID_CLAIM=sub
+OIDC_TENANT_ID_CLAIM=tid
+OIDC_ALLOWED_TENANT_IDS=tenant-a,tenant-b
 ```
 
 Web 端使用 Authorization Code + PKCE，不使用客户端密钥，认证状态和 PKCE 临时数据只保存在当前标签页的 `sessionStorage`。配置以下 Vite 变量后，页头会显示登录/退出入口，所有 API、流程修改和蓝图导出请求会自动携带当前 Access Token：
@@ -219,7 +221,7 @@ VITE_OIDC_AUDIENCE=sap-ai-flow
 
 `project_admin` 可在页头的项目访问弹窗中切换“成员 / 审计”标签。成员新增、角色变更、移除和外部模型策略变更均会记录操作者、时间和前后状态；成员写入与审计记录使用同一数据库事务。
 
-生产环境不会信任 `X-User-ID` 或 `X-Project-Role`。缺少 OIDC 配置时 `/health/ready` 返回 503；无项目上下文的流程修改、知识检索和 GAP 分析兼容接口在非开发环境返回 404。
+生产环境不会信任 `X-User-ID`、`X-Project-Role` 或任何客户端租户头。JWT 必须同时包含用户 claim 和 `OIDC_TENANT_ID_CLAIM`（默认 `tid`），且租户必须命中 `OIDC_ALLOWED_TENANT_IDS`；项目创建时固化当前租户，跨租户项目、流程和知识资源统一隐藏为 404。缺少 OIDC 或租户 allowlist 配置时 `/health/ready` 返回 503；无项目上下文的流程修改、知识检索和 GAP 分析兼容接口在非开发环境返回 404。
 
 ## 日志与安全检查
 
@@ -298,7 +300,7 @@ docker compose -f .\deploy\docker-compose.yml up --build
 
 Compose 默认使用本地 Provider。使用 DeepSeek 时，在启动命令所在环境或根目录 `.env` 中设置 `AGENT_PROVIDER` 和 `DEEPSEEK_API_KEY`。
 
-Compose 以 `APP_ENV=production` 启动 API，因此还必须在根目录 `.env` 中提供上节列出的后端 `OIDC_ISSUER`、`OIDC_AUDIENCE`、`OIDC_JWKS_URL`，以及前端 `VITE_OIDC_AUTHORITY`、`VITE_OIDC_CLIENT_ID` 和 `VITE_OIDC_AUDIENCE`。未配置认证、Provider 或数据库不可连接时，API readiness 会返回 503，Web 服务不会被视为可交付状态。API 的 8000 端口只在 Compose 容器网络中暴露，外部请求统一经过 Nginx；若部署域名不是 `http://localhost:8080`，同时调整 `CORS_ORIGINS` 和 OIDC 回调地址。
+Compose 以 `APP_ENV=production` 启动 API，因此还必须在根目录 `.env` 中提供上节列出的后端 `OIDC_ISSUER`、`OIDC_AUDIENCE`、`OIDC_JWKS_URL`、`OIDC_TENANT_ID_CLAIM` 和 `OIDC_ALLOWED_TENANT_IDS`，以及前端 `VITE_OIDC_AUTHORITY`、`VITE_OIDC_CLIENT_ID` 和 `VITE_OIDC_AUDIENCE`。未配置认证、租户 allowlist、Provider 或数据库不可连接时，API readiness 会返回 503，Web 服务不会被视为可交付状态。API 的 8000 端口只在 Compose 容器网络中暴露，外部请求统一经过 Nginx；若部署域名不是 `http://localhost:8080`，同时调整 `CORS_ORIGINS` 和 OIDC 回调地址。
 
 PostgreSQL 数据、ChromaDB 索引和文件系统导出交付物分别持久化到 `postgres-data`、`chroma-data` 与 `export-data` 命名卷。使用 `EXPORT_STORAGE_BACKEND=s3` 时，导出交付物改由配置的 S3 bucket 管理，`export-data` 卷不承载正式文件。
 

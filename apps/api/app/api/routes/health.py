@@ -41,6 +41,9 @@ def ready(
         "status": "ok" if configured else "not_ready",
         "provider": settings.agent_provider,
         "authentication": "development" if settings.app_env == "development" else "oidc",
+        "tenant_isolation": (
+            "development" if settings.app_env == "development" else "oidc_claim_allowlist"
+        ),
         "database": "ready" if database_available else "unavailable",
         "database_backend": make_url(settings.database_url).get_backend_name(),
         "export_execution": settings.export_execution_mode,
@@ -77,6 +80,9 @@ def metadata(settings: Settings = Depends(get_settings)) -> dict[str, str]:
         "version": "0.1.0",
         "provider": settings.agent_provider,
         "authentication": "development" if settings.app_env == "development" else "oidc",
+        "tenant_isolation": (
+            "development" if settings.app_env == "development" else "oidc_claim_allowlist"
+        ),
         "export_execution": settings.export_execution_mode,
         "artifact_storage": settings.export_storage_backend,
     }
