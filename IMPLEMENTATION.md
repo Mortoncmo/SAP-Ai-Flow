@@ -1,6 +1,6 @@
 # SAP Blueprint AI Agent 实施规格
 
-> 文档状态：新版 Markdown 逐章整合、租户隔离、Alertmanager、滚动中断与目标 S3 验收基线 4.10
+> 文档状态：新版 Markdown 逐章整合、标准 OIDC 协议验收门禁与生产边界基线 4.11
 >
 > 实施状态校准：2026-08-10（以当前代码与自动化测试为准）
 >
@@ -190,6 +190,7 @@
 - 仅 `project_admin` 可见的前端项目访问弹窗，使用“成员 / 审计”标签切换，支持成员列表、新增、角色修改、删除、最后管理员保护、变更前后值与操作者查询，并完成移动视口适配。
 - 生产环境 Bearer JWT 验证基础：通过 OIDC/JWKS 校验非对称签名、issuer、audience、有效期和稳定用户 claim，生产环境忽略 `X-User-ID`。
 - 前端 OIDC Authorization Code + PKCE 登录、回调 URL 清理、退出、`sessionStorage` 会话和全 API Bearer Token 注入；未配置 OIDC 时保持本地开发模式，配置不完整时阻断并显示明确错误。
+- Compose 增加只在 `oidc-acceptance` profile 启动的标准测试 IdP；协议级浏览器门禁覆盖 Authorization Code、PKCE S256、Token 请求 `code_verifier`、Bearer Token 调用受保护项目 API、创建者角色、tenant claim 持久化、退出和匿名 401，并要求失败日志和验收报告不暴露 code、state 或 Token。该门禁的最新 CI 仍有验收脚本运行时错误，修复并全绿前不标记为通过。
 - API 单行 JSON 请求日志、可信 `X-Request-ID`、路由模板/状态/耗时记录、通用异常安全响应和全响应请求号；不记录查询、认证头、Cookie、请求正文或上游异常正文。另提供仅容器内可抓取的低基数 Prometheus 指标、版本化 scrape/alert 规则、Alertmanager 路由和仅用于 CI/本地的脱敏通知接收器，Nginx 不对外暴露 metrics。
 - 校验错误移除原始 `input`/`ctx`，认证 Token/API Key/JWT 与业务敏感字段统一脱敏；CI 执行 Python/Node 依赖审计和生产源码/前端构建秘密扫描。
 - 项目级外部模型默认关闭策略、管理员开关、0004 迁移、策略审计 API、禁用时本地回退以及模型请求体/ChangeLog/GAP 脱敏。
@@ -225,9 +226,9 @@
 
 ### 3.2 尚未完成
 
-- 具体身份提供方和 PostgreSQL/Docker 环境的跨环境浏览器回归仍需扩展；当前 SQLite 隔离环境已覆盖持久化修改、发布、回看、新草稿、成员 CRUD、外部模型策略、查看者权限、蓝图下载失败、核心权限矩阵、跨项目访问和发布预检。
+- 标准测试 IdP 的 Docker/浏览器协议验收门禁已经接入，但 GitHub Actions 运行 `31387383564` 在开始授权跳转时因脚本环境缺少 `URL` 全局对象而失败；必须先修复门禁并取得 API、Web、DOCX 和 deploy 全绿，才能关闭仓库内 OIDC 协议验收。当前 SQLite 隔离环境已覆盖持久化修改、发布、回看、新草稿、成员 CRUD、外部模型策略、查看者权限、蓝图下载失败、核心权限矩阵、跨项目访问和发布预检。
 - 知识库授权审核、顾问正式标注与质量门槛评审、生产语义嵌入模型选型尚未完成；当前已有固定自动化评估集，但 ChromaDB 仍使用离线可重复的字符 n-gram 哈希向量，不宣称具备完整语义 RAG 质量。
-- 具体 SSO/OIDC 身份提供方的客户端注册、真实登录/退出和真实 tenant claim 映射联调尚未完成；通用 SPA PKCE、Bearer Token、租户 allowlist、项目租户归属和跨租户 404 隔离已完成，`X-User-ID` 仅保留在开发环境。
+- 具体 SSO/OIDC 身份提供方的客户端注册、真实登录/退出、Token 刷新/过期和真实 tenant claim 映射联调尚未完成；通用 SPA PKCE、Bearer Token、租户 allowlist、项目租户归属和跨租户 404 隔离已完成，`X-User-ID` 仅保留在开发环境。标准测试 IdP 只能验证通用协议链路，不能替代目标企业身份策略和存量项目映射签字。
 - 容器基础镜像和操作系统包 Trivy 扫描、CycloneDX SBOM 和可修复 Critical 门禁已接入部署 CI；未修复发现仍保留在日志/构件中。低基数 Prometheus 指标、scrape 配置、Alertmanager 路由、脱敏通知接收器、配置校验和合成告警通知演练已完成；集中日志采集/保留策略、生产监控平台接入、企业通知渠道和运行维护签字尚未完成。应用级请求/异常/审计脱敏与秘密扫描已具备自动化红线测试。
 - Python SDK、CLI 和 BPMN 导出。
 - 受控交付物存储代码已实现 `database`（仅开发）、`filesystem`（生产 Compose 默认）和 `s3`（S3 兼容对象存储）三种后端，并已固化会执行真实写入的目标 S3 验收脚本；该脚本尚未对企业 bucket 实跑。目标环境仍需完成工作负载身份、生命周期、备份恢复和正式交付归档签字，不能把本地 Fake S3/CI 文件系统卷验收当成企业文档库签字。
@@ -248,7 +249,7 @@
 - 已可验收：前端主动取消、客户端超时和 `REVISION_CONFLICT` 均不改变图或服务端修订，原指令保留；超时后直接重试可正常进入发布生命周期。
 - 已完成典型闭环：创建项目 → 创建流程 → AI 生成流程 → 保存修订 → 发布版本 → 从发布版本创建新草稿 → 历史修订只读回看。
 - 当前发布预检可阻断项目/流程/图标题、模块、流程范围和 SAP Context 缺失，阻断无节点、无开始/结束节点、无证据的 `verified` 元数据，以及缺少最新人工决策审计、缺少历史 `confirmed` 审计或缺少证据引用的正式 GAP。
-- 当前权限实现已从服务端 `ProjectMemberRecord` 解析项目角色，不再信任客户端 `X-Project-Role`；成员新增、角色变更和移除已记录前后值、操作者和时间，可由管理员在界面中查询。开发环境缺省身份为 `local-user`，生产环境只接受通过 OIDC/JWKS 校验的 Bearer JWT。前端已具备 SPA PKCE 登录、回调、退出和 Token 注入，具体身份提供方客户端注册及部署联调完成前，仍不能视为完整生产认证方案。
+- 当前权限实现已从服务端 `ProjectMemberRecord` 解析项目角色，不再信任客户端 `X-Project-Role`；成员新增、角色变更和移除已记录前后值、操作者和时间，可由管理员在界面中查询。开发环境缺省身份为 `local-user`，生产环境只接受通过 OIDC/JWKS 校验的 Bearer JWT。前端已具备 SPA PKCE 登录、回调、退出和 Token 注入，Compose/CI 也已加入标准测试 IdP 协议门禁；该门禁恢复全绿且具体身份提供方客户端注册及部署联调完成前，仍不能视为完整生产认证方案。
 - 当前知识检索已使用 ChromaDB 持久化索引和向量/词法混合排序；开发环境允许待审核种子并保持待确认标识，生产环境只索引授权且顾问审核通过的语料。固定自动化评估集已完成，顾问正式标注、质量门槛签字和生产语义嵌入模型仍待完成。
 - 当前离线混合检索要求最高候选分数至少达到 0.30，达到门槛后保留同一查询的相关支持证据；PP 生产订单和 SD 退货开票等近邻负例必须返回证据不足。GAP 规则除模块外还必须与流程范围和 SAP Release 一致，禁止跨范围或跨版本套用候选规则。
 - 当前 LangGraph 只编排请求级状态：纯泳道/连线/图标/布局修改不再依赖知识服务，SAP 专业修改保留检索、证据不足、外部模型策略、原子 Patch、证据校验和待确认分支；编排成功后才由现有 Repository 保存修订和 ChangeLog。文档导出增加待确认预检分支，渲染仍复用同一 `BlueprintDocumentModel`。
@@ -270,6 +271,7 @@
 - 仓库内 Playwright CLI smoke 默认自动分配端口并启动当前 API、Web 和隔离 SQLite 测试库，不依赖已运行的开发进程。它已完成自然语言连线新增、标签修改和删除，以及画布连线 Inspector 标签保存和删除；三类操作均验证节点、泳道不变，连线永久 ID 和端点在标签更新时保持不变，`viewer` 可查看但不能编辑、删除或使用键盘删除连线。
 - 同一 smoke 已完成持久化自然语言修改、发布只读、新草稿、历史回看、成员 CRUD 与可见审计、外部模型开关、异步 Markdown / Word 下载、取消/超时/409 恢复、泳道不误增节点、撤销/重做/布局/刷新恢复和 20 次本地 Patch P95 小于 1 秒；1440 x 900、1024 x 768 和 390 x 844 页面宽度正常，移动端成员/审计标签页无横向溢出，控制台与页面均为 0 error。
 - OIDC 本切片浏览器验收覆盖未配置兼容模式和“已配置但未登录”模式：登录入口可见，项目选择与新建项目被禁用，390 x 844 和 1024 x 768 页面/页头 `scrollWidth` 均等于视口宽度，登录图标宽度稳定为 35 px，控制台无 error。真实 IdP 跳转与回调仍待目标环境联调。
+- 标准测试 IdP 协议验收已加入 Compose 和 GitHub Actions：固定测试身份 `ci-consultant`、租户 `ci-tenant` 和 audience `sap-ai-flow-ci`，计划验证 Authorization Code + PKCE S256、Token 交换中的 `code_verifier`、Bearer Token、创建者 `project_admin`、数据库 tenant 归属、退出、匿名 401 以及浏览器错误。运行 `31387383564` 的 API、Web 和 `docx-render` 作业通过，deploy 作业在 `[starting authorization code flow] URL is not defined` 处失败，因此本记录只证明门禁已接入并暴露了脚本兼容问题，不证明协议验收通过。
 - `pip-audit` 在升级 Pillow 12.3.0 后无可修复漏洞；ChromaDB `PYSEC-2026-311` 因项目未暴露 Chroma HTTP API 而按 `SECURITY.md` 限定例外并设 2026-09-09 复核日。`npm audit --omit=dev` 为 0 漏洞，生产源码/前端构建秘密扫描通过。
 - `scripts/browser_smoke.ps1` 与 `scripts/browser_smoke.js` 已固化本地历史/恢复、泳道、连线双入口增改删、成员 CRUD 与可见审计、外部模型策略、取消/超时/冲突恢复、本地 P95、持久化发布生命周期、管理员/查看者权限、异步任务 `202`/`export_id`/`pending` 与实际下载，以及三视口回归；还需在真实外部模型/PostgreSQL 环境扩展并发、长尾与容量测试。
 - `scripts/run_capacity_test.ps1` 已在隔离 SQLite/Local Provider 环境完成 1/2/4 并发、每档 5 样本的脚本验收，三档错误率均为 0，P95 分别为 430/90/187 ms；1 ms P95/P99 门槛会正确保存 `passed=false` 报告并返回非零。数据创建确认、远程无 Token 拒绝、SQLite 被 `-RequirePostgreSQL` 拒绝且不进入测试数据创建的门禁均已实跑。该结果只证明工具可用，不是外部模型/PostgreSQL 容量结论。
@@ -989,7 +991,8 @@ V1.0 至少定义以下角色：
 - 前端从 `ProjectSummary.current_role` 读取当前角色，并在 `viewer` 模式下保持流程浏览和导出可用，同时禁用编辑、布局、导入、泳道、SAP 环境、节点属性、自然语言指令和发布操作。
 - `X-User-ID` 仅用于本地开发和自动化测试，开发环境缺省为 `local-user`；非开发环境忽略该请求头，只接受通过 OIDC/JWKS 验证的 Bearer JWT。
 - 生产令牌必须使用允许的非对称算法，并校验签名、issuer、audience、`exp`、`iat` 和配置的稳定用户 claim；过期、错误签名和错误 claims 统一返回 401。
-- 具体身份提供方的 SPA PKCE 登录/回调或认证代理仍需按部署环境接入；成员变更审计查询、租户 claim/allowlist 策略和跨租户资源隔离已完成，目标 IdP 的真实 tenant claim 值与存量项目映射仍待联调。
+- 标准测试 IdP 的 Compose profile 和协议验收脚本已经接入，用于验证通用 SPA PKCE 登录、Token 交换、Bearer API、tenant 持久化和退出链路；当前 CI 兼容错误关闭前不得标记协议验收通过。
+- 具体身份提供方仍需按部署环境登记 SPA 客户端、回调地址、退出地址和 API audience，并验证真实 tenant claim、Token 刷新/过期及存量项目映射；标准测试 IdP 结果不替代企业 IdP 和安全团队签字。
 
 ### 13.2 数据与模型安全
 
@@ -1163,6 +1166,8 @@ V1.0 至少定义以下角色：
 - [x] 将成员新增、角色变更和移除纳入同事务项目审计，并在管理员弹窗提供“成员 / 审计”可见查询和移动端回归。
 - [x] 完成生产 Bearer JWT 的 OIDC/JWKS 签名与 claims 验证、开发身份隔离、readiness 门禁和兼容接口生产关闭。
 - [x] 完成前端 Authorization Code + PKCE 登录、回调清理、退出、`sessionStorage` 会话、登录状态 UI 和全 API Bearer Token 注入。
+- [x] 接入标准测试 IdP、`oidc-acceptance` Compose profile 和协议级 Playwright 门禁，覆盖 PKCE、Token 交换、Bearer、tenant、角色、退出、匿名拒绝和脱敏报告。
+- [ ] 修复标准测试 IdP 验收脚本在 Playwright CLI 环境中的 `URL` 兼容问题，并取得 API、Web、DOCX 和 deploy 全绿证据。
 - [x] 完成项目级 `external_model_enabled`、`project_audit_log`、0004 迁移和项目设置/审计 API 的测试与修正。
 - [x] 完成外部 Provider 标记、默认本地回退、请求级敏感数据脱敏和 ChangeLog/GAP 脱敏的红线测试。
 - [x] 在管理员界面增加“仅本地 / 允许调用”开关、数据外发二次确认、状态刷新和移动端适配。
@@ -1226,6 +1231,8 @@ V1.0 至少定义以下角色：
 - [x] 完成应用依赖、生产源码、前端构建和外部模型数据流安全检查；ChromaDB 无修复版公告按限定攻击面登记复核。
 - [x] 完成低基数 Prometheus 指标、内部端点隔离、版本化 scrape/alert 规则、Alertmanager 路由、`promtool`/`amtool` 校验和合成通知演练；目标监控平台的远程写入、集中日志保留、企业通知路由和演练签字仍需环境联调。
 - [x] 完成容器基础镜像/操作系统包 Trivy 扫描、CycloneDX SBOM 和可修复 Critical 门禁；未修复发现按 `SECURITY.md` 保留复核日期。
+- [x] 完成标准测试 IdP、Authorization Code + PKCE、Bearer、tenant 和退出的 Compose/CI 验收配置与脱敏证据输出设计。
+- [ ] 修复标准测试 IdP 浏览器验收脚本兼容问题并取得 deploy 作业通过证据。
 - [ ] 完成生产日志平台联调、集中保留策略、Prometheus/Alertmanager 接入、通知路由和告警演练。
 - [ ] 完成 MM/P2P 顾问验收和问题收敛。
 - [x] 更新 README、版本化 API 验收场景、最终演示脚本和输出校验。
@@ -1278,6 +1285,9 @@ V1.0 至少定义以下角色：
 - [x] 外部模型缓存按项目/流程隔离，失败不缓存，命中后仍执行证据、Patch、修订和事务校验。
 - [x] 项目权限、数据脱敏和外部模型策略生效。
 - [x] 项目成员新增、角色变更和移除均与成员写入原子提交，管理员可在前端查看前后值、操作者和时间。
+- [x] 前端 Authorization Code + PKCE、后端 Bearer JWT/JWKS、租户 allowlist 和跨租户 404 隔离均有单元或集成测试。
+- [ ] 标准测试 IdP 的协议级浏览器门禁在 GitHub Actions 全绿，且验收报告包含 PKCE、Token 交换、Bearer、tenant、退出和匿名拒绝结果。
+- [ ] 目标企业 IdP 已完成客户端注册、真实登录/退出、Token 刷新/过期、tenant claim 和存量项目映射联调。
 - [x] Docker Compose 的 PostgreSQL/API/Web 基线已在干净 GitHub Ubuntu runner 完成迁移、备份和恢复。
 - [x] Docker Compose 的 Worker 服务已固化真实 PostgreSQL 任务、0009 迁移、共享 `export-data` 卷、对象完整性和数据库二进制为空的验收；目标环境的卷/S3 备份恢复仍需实跑并签字。
 - [x] Docker Compose 已在 GitHub Ubuntu runner 扩容到两个健康 Worker，并通过普通任务恰好一次、心跳新鲜任务保留和陈旧租约栅栏验收。
@@ -1286,10 +1296,10 @@ V1.0 至少定义以下角色：
 
 基础契约、流程编辑、持久化、版本工作流、服务端项目成员角色与成员变更可见审计、项目级知识/GAP 查询、发布 GAP 审计、持久化异步文档导出、独立导出 Worker 和进程内外部 Provider 结果缓存已经落地。连线双入口增改删、导出任务创建/轮询/下载、Worker 租约栅栏与缓存安全边界已完成代码、契约、权限和本地自动化验收；后续进入依赖外部环境、部署架构或业务签字的生产验收：
 
-1. 在目标 SSO/OIDC 身份提供方登记 SPA 客户端、回调地址和 API audience，完成真实登录、退出、Token 刷新/过期及部署联调；通用 Authorization Code + PKCE、Bearer Token 注入和应用日志治理已完成。
+1. 先修复标准测试 IdP 验收脚本的 Playwright CLI `URL` 兼容问题，取得 API、Web、DOCX 和 deploy 全绿并归档脱敏 OIDC 验收报告；再在目标 SSO/OIDC 身份提供方登记 SPA 客户端、回调/退出地址和 API audience，完成真实登录、退出、Token 刷新/过期、tenant claim 与存量项目映射联调。通用 Authorization Code + PKCE、Bearer Token 注入和应用日志治理代码已完成。
 2. 完成知识来源/授权顾问审核、正式标注集和生产语义嵌入模型对比；ChromaDB 持久化、离线混合召回和固定自动化评估集已完成。
 3. 使用已固化的容量脚本在真实外部模型/PostgreSQL 环境完成并发、长尾和容量测试并归档 JSON/CSV；仓库内 80 节点 DOCX 的 Worker 强杀与真实陈旧恢复门禁已完成，目标环境仍需用代表性最大文档和部署控制器复跑，以确认轮询批量、陈旧阈值、内存和实例数上限。
 4. 在目标环境完成企业 S3 bucket 或文档库的身份/权限注册，使用 `scripts/verify_s3_storage.py --allow-write` 验证真实读写、AES256、版本化、生命周期覆盖和删除可见性并归档脱敏 JSON 报告；另行检查删除标记与非当前版本的清理/恢复策略，因为一次 `DeleteObject` 不会物理清除版本化 bucket 的旧版本。filesystem 方案需完成 `export-data` 卷归档恢复。随后复跑已固化的 DOCX 渲染门禁并完成部署联调和运行维护签字；若目标环境沿用 LibreOffice/Noto CJK，可直接对比 CI 基线，若更换字体或渲染器则必须重新逐页检查。
 5. 结合真实外部模型容量和命中率结果调整缓存 TTL/容量，并决定多实例环境是否引入分布式缓存；Python SDK、CLI 和 BPMN 保持后续优先级。
 
-当前本机可执行的最终流程编辑验收项、OIDC 租户 claim/allowlist 与跨租户隔离、受控交付物存储单元/SQLite 回归、目标 S3 验收工具、独立 Worker 双进程验收、心跳续租与租约丢失补偿回归、80 节点 DOCX 进程强杀/真实陈旧恢复门禁、GitHub Actions 0009 Compose/PostgreSQL 双 Worker 共享交付物验收，以及 LibreOffice/Noto CJK DOCX 跨渲染器验收基线已完成。生产验收剩余门槛包括具体身份提供方真实登录和 tenant claim/存量项目映射联调、知识授权与顾问签字、集中日志、真实外部模型容量、目标最大文档/部署控制器滚动中断、企业 S3/文档库实跑及非当前版本清理/备份恢复、目标环境 DOCX 复跑和部署联调。这些项目未验证前不得宣称生产验收完成。
+当前本机可执行的最终流程编辑验收项、OIDC 租户 claim/allowlist 与跨租户隔离、受控交付物存储单元/SQLite 回归、目标 S3 验收工具、独立 Worker 双进程验收、心跳续租与租约丢失补偿回归、80 节点 DOCX 进程强杀/真实陈旧恢复门禁、GitHub Actions 0009 Compose/PostgreSQL 双 Worker 共享交付物验收，以及 LibreOffice/Noto CJK DOCX 跨渲染器验收基线已完成。标准测试 IdP 的协议门禁已进入仓库，但最新 deploy 作业仍因验收脚本兼容问题失败，必须先恢复全绿。生产验收剩余门槛还包括具体身份提供方真实登录、Token 生命周期和 tenant claim/存量项目映射联调、知识授权与顾问签字、集中日志、真实外部模型容量、目标最大文档/部署控制器滚动中断、企业 S3/文档库实跑及非当前版本清理/备份恢复、目标环境 DOCX 复跑和部署联调。这些项目未验证前不得宣称生产验收完成。
