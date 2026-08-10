@@ -249,7 +249,7 @@
 - 当前离线混合检索要求最高候选分数至少达到 0.30，达到门槛后保留同一查询的相关支持证据；PP 生产订单和 SD 退货开票等近邻负例必须返回证据不足。GAP 规则除模块外还必须与流程范围和 SAP Release 一致，禁止跨范围或跨版本套用候选规则。
 - 当前 LangGraph 只编排请求级状态：纯泳道/连线/图标/布局修改不再依赖知识服务，SAP 专业修改保留检索、证据不足、外部模型策略、原子 Patch、证据校验和待确认分支；编排成功后才由现有 Repository 保存修订和 ChangeLog。文档导出增加待确认预检分支，渲染仍复用同一 `BlueprintDocumentModel`。
 - 当前外部 Provider 缓存只在项目明确开启外部模型后参与持久化修改；相同请求首次为 `miss`，TTL 内重复请求为 `hit`，同一事件循环的并发重复请求为 `shared`，本地规则或禁用缓存时为 `bypassed`。缓存命中仍重新执行证据验证、原子 Patch、修订冲突和数据库事务；数据库保存失败后的相同重试可复用 Provider 结果，但失败事务本身不会产生修订或 ChangeLog。
-- 当前部署配置已具备稳定镜像命名、独立 Worker 健康检查、共享文件系统交付物卷和可重复的 Compose/PostgreSQL 验收入口；本轮 CI 将固化 readiness、0008 迁移、对象不落数据库、普通任务恰好一次、心跳新鲜任务保留、陈旧租约接管、旧 Token 栅栏、备份和恢复。
+- 当前部署配置已具备稳定镜像命名、独立 Worker 健康检查、共享文件系统交付物卷和可重复的 Compose/PostgreSQL 验收入口；GitHub Actions 已固化 readiness、0008 迁移、对象不落数据库、普通任务恰好一次、心跳新鲜任务保留、陈旧租约接管、旧 Token 栅栏、备份和恢复。
 
 ### 3.4 本轮验证记录（2026-08-10）
 
@@ -270,6 +270,7 @@
 - 当前机器没有 LibreOffice/`soffice` 和 Docker CLI；对应验收由 GitHub Ubuntu runner 执行，不能把本机 `--generate-only` 结构检查误报为视觉通过。
 - GitHub Actions 运行 `31316347775` 对提交 `21656e5` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过。`deploy` 启动 PostgreSQL/API/Web 并确认两个 Worker 都为健康状态，readiness 确认为 PostgreSQL 和 `export_execution=worker`，Alembic 为 `20260809_0006 (head)`；多 Worker 验收返回 `status=passed`、`parallel_job_count=12`、`exactly_once_job_count=12`、`stale_attempt_count=2`、`stale_write_rejected=true`、`content_length=16107`，随后 `pg_dump` 恢复到独立数据库并再次确认迁移头为 0006。`docx-render` 继续通过 LibreOffice Writer、Poppler 和 Noto CJK 的 5 页 PDF/PNG 门禁。
 - GitHub Actions 运行 `31355418269` 对提交 `4203812` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过。`deploy` 确认 Alembic 为 `20260809_0007 (head)`，两个 Worker 健康；验收返回 `parallel_job_count=12`、`exactly_once_job_count=12`、`stale_attempt_count=2`、`stale_write_rejected=true`、`fresh_heartbeat_preserved=true`、`content_length=16107`，备份恢复后的迁移头仍为 0007。
+- GitHub Actions 运行 `31358163552` 对提交 `649e174` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过。`deploy` readiness 确认 PostgreSQL、`export_execution=worker`、`artifact_storage=filesystem` 和 `artifact_storage_status=ready`，Alembic 为 `20260810_0008 (head)`；共享文件系统导出验收返回 `database_content_empty=true`、`parallel_job_count=12`、`exactly_once_job_count=12`、`stale_attempt_count=2`、`stale_write_rejected=true`、`fresh_heartbeat_preserved=true`、`content_length=16107`，备份恢复后的迁移头仍为 0008。该 CI 证明仓库默认生产 Compose 的交付物与数据库隔离，不替代目标企业 S3/文档库注册、卷归档恢复和正式交付签字。
 
 ### 3.5 基线迁移原则
 
@@ -1263,4 +1264,4 @@ V1.0 至少定义以下角色：
 4. 在目标环境完成企业 S3 bucket 或文档库的身份/权限注册、生命周期、版本化和备份恢复；filesystem 方案需完成 `export-data` 卷归档恢复。随后复跑已固化的 DOCX 渲染门禁并完成部署联调和运行维护签字；若目标环境沿用 LibreOffice/Noto CJK，可直接对比 CI 基线，若更换字体或渲染器则必须重新逐页检查。
 5. 结合真实外部模型容量和命中率结果调整缓存 TTL/容量，并决定多实例环境是否引入分布式缓存；Python SDK、CLI 和 BPMN 保持后续优先级。
 
-当前本机可执行的最终流程编辑验收项、受控交付物存储单元/SQLite 回归、独立 Worker 双进程验收、心跳续租与租约丢失补偿回归、以及 LibreOffice/Noto CJK DOCX 跨渲染器验收基线已完成；本轮 0008 Compose/PostgreSQL 双 Worker 和共享交付物远端验收待 CI 通过后记录。生产验收剩余门槛包括具体身份提供方、知识授权与顾问签字、集中日志、真实外部模型容量、真实长文档滚动中断恢复、企业 S3/文档库注册与备份恢复、目标环境 DOCX 复跑和部署联调。这些项目未验证前不得宣称生产验收完成。
+当前本机可执行的最终流程编辑验收项、受控交付物存储单元/SQLite 回归、独立 Worker 双进程验收、心跳续租与租约丢失补偿回归、GitHub Actions 0008 Compose/PostgreSQL 双 Worker 共享交付物验收，以及 LibreOffice/Noto CJK DOCX 跨渲染器验收基线已完成。生产验收剩余门槛包括具体身份提供方、知识授权与顾问签字、集中日志、真实外部模型容量、真实长文档滚动中断恢复、企业 S3/文档库注册与备份恢复、目标环境 DOCX 复跑和部署联调。这些项目未验证前不得宣称生产验收完成。
