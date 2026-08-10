@@ -190,7 +190,7 @@
 - 仅 `project_admin` 可见的前端项目访问弹窗，使用“成员 / 审计”标签切换，支持成员列表、新增、角色修改、删除、最后管理员保护、变更前后值与操作者查询，并完成移动视口适配。
 - 生产环境 Bearer JWT 验证基础：通过 OIDC/JWKS 校验非对称签名、issuer、audience、有效期和稳定用户 claim，生产环境忽略 `X-User-ID`。
 - 前端 OIDC Authorization Code + PKCE 登录、回调 URL 清理、退出、`sessionStorage` 会话和全 API Bearer Token 注入；未配置 OIDC 时保持本地开发模式，配置不完整时阻断并显示明确错误。
-- API 单行 JSON 请求日志、可信 `X-Request-ID`、路由模板/状态/耗时记录、通用异常安全响应和全响应请求号；不记录查询、认证头、Cookie、请求正文或上游异常正文。另提供仅容器内可抓取的低基数 Prometheus 指标、版本化 scrape 配置和 1% 5xx/P95 8 秒告警规则，Nginx 不对外暴露 metrics。
+- API 单行 JSON 请求日志、可信 `X-Request-ID`、路由模板/状态/耗时记录、通用异常安全响应和全响应请求号；不记录查询、认证头、Cookie、请求正文或上游异常正文。另提供仅容器内可抓取的低基数 Prometheus 指标、版本化 scrape/alert 规则、Alertmanager 路由和仅用于 CI/本地的脱敏通知接收器，Nginx 不对外暴露 metrics。
 - 校验错误移除原始 `input`/`ctx`，认证 Token/API Key/JWT 与业务敏感字段统一脱敏；CI 执行 Python/Node 依赖审计和生产源码/前端构建秘密扫描。
 - 项目级外部模型默认关闭策略、管理员开关、0004 迁移、策略审计 API、禁用时本地回退以及模型请求体/ChangeLog/GAP 脱敏。
 - 管理员成员弹窗中的“仅本地 / 允许调用”开关、数据外发二次确认、状态回写和 390 x 844 移动端适配。
@@ -227,7 +227,7 @@
 - 具体身份提供方和 PostgreSQL/Docker 环境的跨环境浏览器回归仍需扩展；当前 SQLite 隔离环境已覆盖持久化修改、发布、回看、新草稿、成员 CRUD、外部模型策略、查看者权限、蓝图下载失败、核心权限矩阵、跨项目访问和发布预检。
 - 知识库授权审核、顾问正式标注与质量门槛评审、生产语义嵌入模型选型尚未完成；当前已有固定自动化评估集，但 ChromaDB 仍使用离线可重复的字符 n-gram 哈希向量，不宣称具备完整语义 RAG 质量。
 - 具体 SSO/OIDC 身份提供方的客户端注册、真实登录/退出和真实 tenant claim 映射联调尚未完成；通用 SPA PKCE、Bearer Token、租户 allowlist、项目租户归属和跨租户 404 隔离已完成，`X-User-ID` 仅保留在开发环境。
-- 容器基础镜像和操作系统包 Trivy 扫描、CycloneDX SBOM 和可修复 Critical 门禁已接入部署 CI；未修复发现仍保留在日志/构件中。低基数 Prometheus 指标、scrape 配置、告警规则与 promtool 门禁已完成；集中日志采集/保留策略、生产监控平台接入、告警通知路由和演练尚未完成。应用级请求/异常/审计脱敏与秘密扫描已具备自动化红线测试。
+- 容器基础镜像和操作系统包 Trivy 扫描、CycloneDX SBOM 和可修复 Critical 门禁已接入部署 CI；未修复发现仍保留在日志/构件中。低基数 Prometheus 指标、scrape 配置、Alertmanager 路由、脱敏通知接收器、配置校验和合成告警通知演练已完成；集中日志采集/保留策略、生产监控平台接入、企业通知渠道和运行维护签字尚未完成。应用级请求/异常/审计脱敏与秘密扫描已具备自动化红线测试。
 - Python SDK、CLI 和 BPMN 导出。
 - 受控交付物存储代码已实现 `database`（仅开发）、`filesystem`（生产 Compose 默认）和 `s3`（S3 兼容对象存储）三种后端，并已固化会执行真实写入的目标 S3 验收脚本；该脚本尚未对企业 bucket 实跑。目标环境仍需完成工作负载身份、生命周期、备份恢复和正式交付归档签字，不能把本地 Fake S3/CI 文件系统卷验收当成企业文档库签字。
 - 独立 Worker 已在本地 SQLite 双进程回归和 GitHub PostgreSQL 双 Worker 场景完成领取、心跳续租、并发恰好一次、心跳新鲜任务保留和陈旧租约接管；真实长文档超过陈旧阈值的渲染耗时、滚动中断恢复与容量上限仍需目标环境验证。
@@ -254,10 +254,11 @@
 - 当前外部 Provider 缓存只在项目明确开启外部模型后参与持久化修改；相同请求首次为 `miss`，TTL 内重复请求为 `hit`，同一事件循环的并发重复请求为 `shared`，本地规则或禁用缓存时为 `bypassed`。缓存命中仍重新执行证据验证、原子 Patch、修订冲突和数据库事务；数据库保存失败后的相同重试可复用 Provider 结果，但失败事务本身不会产生修订或 ChangeLog。
 - 当前部署配置已具备稳定镜像命名、独立 Worker 健康检查、共享文件系统交付物卷和可重复的 Compose/PostgreSQL 验收入口；GitHub Actions 已固化租户 allowlist readiness、0009 迁移、对象不落数据库、普通任务恰好一次、心跳新鲜任务保留、陈旧租约接管、旧 Token 栅栏、备份和恢复。
 - 当前目标 S3 验收工具只在操作者显式确认写入后运行，报告使用 bucket/prefix 的 SHA-256 短指纹，不输出访问密钥或目标名称；`DeleteObject` 验证的是当前对象已不可读。版本化 bucket 会生成删除标记，非当前探针版本仍由目标生命周期、保留和备份策略负责清理或恢复，不能把“删除不可读”解释为所有版本已物理清除。
+- 当前监控 profile 已连接 Prometheus、Alertmanager 和临时脱敏接收器；CI 注入合成 `SapAiFlowAcceptanceDrill` 并验证只保留 `alertname`、`severity`、`status` 和接收时间。该接收器不承担生产通知，企业渠道、静默/升级策略、日志集中保留和演练签字仍待目标环境。
 
 ### 3.4 本轮验证记录（2026-08-10）
 
-- 后端 `ruff check .` 通过，pytest 126 项通过，新增覆盖目标 S3 验收探针成功往返、AES256、版本化、生命周期覆盖、删除后不可读、失败清理和报告脱敏；同时覆盖成员新增、无变化更新、角色变更和移除的原子审计，同一 subject 在不同 OIDC 租户间的项目/流程/知识接口隔离，以及 Prometheus 路由模板低基数与敏感标识不泄露；并继续覆盖文件系统/S3 交付物存储、SHA-256 完整性、过期删除重试、租约丢失补偿删除、生产数据库存储回退、LangGraph 路由、证据不足、文档导出预检、Worker 租约、迁移、容量契约、RAG/GAP、权限、连线原子操作、Provider 时限/缓存、JWT、脱敏、事务回滚和依赖失败保图。
+- 后端 `ruff check .` 通过，pytest 128 项通过，新增覆盖目标 S3 验收探针成功往返、AES256、版本化、生命周期覆盖、删除后不可读、失败清理和报告脱敏，以及 Alertmanager 接收器的字段白名单、内存上限和非法载荷拒绝；同时覆盖成员新增、无变化更新、角色变更和移除的原子审计，同一 subject 在不同 OIDC 租户间的项目/流程/知识接口隔离，以及 Prometheus 路由模板低基数与敏感标识不泄露；并继续覆盖文件系统/S3 交付物存储、SHA-256 完整性、过期删除重试、租约丢失补偿删除、生产数据库存储回退、LangGraph 路由、证据不足、文档导出预检、Worker 租约、迁移、容量契约、RAG/GAP、权限、连线原子操作、Provider 时限/缓存、JWT、脱敏、事务回滚和依赖失败保图。
 - 依赖/导出失败回归通过：知识服务和 Provider 故障分别返回稳定错误；DOCX 渲染故障返回通用 500；三类失败后当前流程仍为修订 0，修订表与 ChangeLog 无新增记录。
 - SQLite 故障注入在 `ChangeLog` INSERT 阶段抛出 `OperationalError`，验证 API 返回安全的 `DATABASE_WRITE_FAILED`（503）并保留请求号；重新打开 Session 后流程修订号、修订表和 ChangeLog 均无部分更新。
 - 模型缓存专项回归覆盖 TTL、LRU、8 个相同并发请求只调用一次 Provider、失败不缓存、最后等待者取消后终止上游任务、跨项目/流程隔离和命中后重新执行证据校验；数据库故障注入还验证首次外部调用成功但事务回滚后，相同重试从缓存恢复，Provider 总调用次数仍为 1，最终只保存 1 个修订和 1 条 ChangeLog。
@@ -278,6 +279,7 @@
 - GitHub Actions 运行 `31369547593` 对提交 `1177e02` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过。`deploy` readiness 确认 `tenant_isolation=oidc_claim_allowlist`、PostgreSQL、`export_execution=worker`、`artifact_storage=filesystem` 和 `artifact_storage_status=ready`，Alembic 为 `20260810_0009 (head)`；共享文件系统双 Worker 验收继续返回 `database_content_empty=true`、`parallel_job_count=12`、`exactly_once_job_count=12`、`stale_attempt_count=2`、`stale_write_rejected=true`、`fresh_heartbeat_preserved=true`、`content_length=16107`，备份恢复后的迁移头仍为 0009。该 CI 证明租户配置门禁和 0009 在干净 PostgreSQL Compose 栈可迁移、备份和恢复，不替代目标 IdP 的真实 tenant claim/存量项目映射联调。
 - GitHub Actions 运行 `31373701595` 对提交 `9520a03` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过。官方 `promtool` 确认 `prometheus.yml` 配置有效且发现 1 个规则文件，`alerts.yml` 的 3 条规则全部有效；API 作业包含新增 `prometheus-client` 的依赖审计，Compose 作业继续通过租户 readiness、0009、双 Worker、文件系统交付物和 PostgreSQL 备份恢复门禁。该 CI 关闭仓库内指标格式、PromQL 语法和配置装配风险，不替代目标 Prometheus/Alertmanager、集中日志保留和通知演练。
 - GitHub Actions 运行 `31374798367` 对提交 `13fe8a8` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过，确认监控验收记录提交未改变 0009、租户隔离、双 Worker、文件系统交付物、PostgreSQL 备份恢复和 DOCX 渲染基线。
+- GitHub Actions 运行 `31377108914` 对提交 `9941087` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过，确认目标 S3 验收工具与文档提交未改变 0009、租户隔离、双 Worker、文件系统交付物、PostgreSQL 备份恢复和 DOCX 渲染基线。
 
 ### 3.5 基线迁移原则
 
@@ -1163,7 +1165,7 @@ V1.0 至少定义以下角色：
 - [x] 完成应用级请求/异常 JSON 日志、请求号、认证秘密/业务字段脱敏、校验响应净化和仓库秘密扫描。
 - [x] 将持久化发布生命周期、成员 CRUD/可见审计、外部模型二次确认/审计、`viewer` UI/API 权限和管理员/查看者蓝图下载固化为自包含 Playwright smoke。
 - [x] 完成可配置 OIDC 租户 claim、allowlist、项目租户归属、跨租户 404 隔离和 0009 迁移回填。
-- [x] 增加低基数 API Prometheus 指标、内部抓取端点、可选 Compose monitoring profile、promtool 配置/告警校验和 1% 5xx/P95 8 秒规则。
+- [x] 增加低基数 API Prometheus 指标、内部抓取端点、可选 Compose monitoring profile、Prometheus/Alertmanager 配置校验、脱敏通知接收器演练和 1% 5xx/P95 8 秒规则。
 - [ ] 完成具体身份提供方客户端注册和真实登录/退出联调，完善知识授权、集中日志平台接入和生产告警路由。
 
 退出标准：服务端成员角色、核心跨项目访问拒绝、成员管理 UI 和生产 JWT 验证基础已通过测试；还必须证明项目默认不会外发数据、管理员授权可审计、敏感数据不进入外部请求和持久化日志，并完成具体身份提供方联调，才可视为生产权限验收通过。
@@ -1216,7 +1218,7 @@ V1.0 至少定义以下角色：
 - [x] 完成 `.dockerignore`、强制数据库密码、API 内网端口、Web 健康检查和数据库 readiness 的静态部署红线测试。
 - [x] 完成数据库迁移、备份恢复和故障排查文档；真实 PostgreSQL 演练仍由 Week 6 独立验收项跟踪。
 - [x] 完成应用依赖、生产源码、前端构建和外部模型数据流安全检查；ChromaDB 无修复版公告按限定攻击面登记复核。
-- [x] 完成低基数 Prometheus 指标、内部端点隔离、版本化 scrape/alert 规则和 CI `promtool` 校验；目标监控平台的远程写入、集中日志保留和通知路由仍需环境联调。
+- [x] 完成低基数 Prometheus 指标、内部端点隔离、版本化 scrape/alert 规则、Alertmanager 路由、`promtool`/`amtool` 校验和合成通知演练；目标监控平台的远程写入、集中日志保留、企业通知路由和演练签字仍需环境联调。
 - [x] 完成容器基础镜像/操作系统包 Trivy 扫描、CycloneDX SBOM 和可修复 Critical 门禁；未修复发现按 `SECURITY.md` 保留复核日期。
 - [ ] 完成生产日志平台联调、集中保留策略、Prometheus/Alertmanager 接入、通知路由和告警演练。
 - [ ] 完成 MM/P2P 顾问验收和问题收敛。

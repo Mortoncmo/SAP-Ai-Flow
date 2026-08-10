@@ -28,6 +28,8 @@ def test_compose_requires_database_password_and_keeps_api_internal():
     worker = compose["services"]["worker"]
     web = compose["services"]["web"]
     prometheus = compose["services"]["prometheus"]
+    alertmanager = compose["services"]["alertmanager"]
+    alert_receiver = compose["services"]["alert-drill-receiver"]
 
     assert "sap_blueprint_dev" not in raw
     assert "${POSTGRES_PASSWORD:?" in postgres["environment"]["POSTGRES_PASSWORD"]
@@ -77,8 +79,20 @@ def test_compose_requires_database_password_and_keeps_api_internal():
     assert prometheus["image"] == "prom/prometheus:v3.5.0"
     assert prometheus["profiles"] == ["monitoring"]
     assert prometheus["depends_on"]["api"]["condition"] == "service_healthy"
+    assert prometheus["depends_on"]["alertmanager"]["condition"] == "service_started"
     assert "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090" in prometheus["ports"]
+    assert alertmanager["image"] == "prom/alertmanager:v0.28.1"
+    assert alertmanager["profiles"] == ["monitoring"]
+    assert "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093" in alertmanager["ports"]
+    assert alertmanager["depends_on"]["alert-drill-receiver"]["condition"] == "service_healthy"
+    assert alert_receiver["image"] == api["image"]
+    assert alert_receiver["profiles"] == ["monitoring"]
+    assert alert_receiver["read_only"] is True
+    assert "app.monitoring.alert_drill_receiver" in alert_receiver["command"]
+    assert "ports" not in alert_receiver
+    assert alert_receiver["expose"] == ["8080"]
     assert "prometheus-data" in compose["volumes"]
+    assert "alertmanager-data" in compose["volumes"]
 
 
 def test_settings_accept_compose_list_environment_values(monkeypatch):
@@ -160,11 +174,17 @@ def test_prometheus_scrape_and_alert_rules_are_low_cardinality_and_threshold_ali
     alerts = yaml.safe_load(
         (ROOT / "deploy" / "monitoring" / "alerts.yml").read_text(encoding="utf-8")
     )
+    alertmanager = yaml.safe_load(
+        (ROOT / "deploy" / "monitoring" / "alertmanager.yml").read_text(encoding="utf-8")
+    )
 
     scrape = prometheus["scrape_configs"][0]
     assert scrape["job_name"] == "sap-ai-flow-api"
     assert scrape["metrics_path"] == "/internal/metrics"
     assert scrape["static_configs"][0]["targets"] == ["api:8000"]
+    assert prometheus["alerting"]["alertmanagers"][0]["static_configs"][0]["targets"] == [
+        "alertmanager:9093"
+    ]
     rules = {rule["alert"]: rule for group in alerts["groups"] for rule in group["rules"]}
     assert set(rules) == {
         "SapAiFlowApiUnavailable",
@@ -180,6 +200,14 @@ def test_prometheus_scrape_and_alert_rules_are_low_cardinality_and_threshold_ali
     assert "> 8" in latency_expression
     serialized = (error_expression + latency_expression).lower()
     assert all(label not in serialized for label in ("project_id", "user_id", "tenant_id"))
+    assert alertmanager["route"]["receiver"] == "local-drill-webhook"
+    assert set(alertmanager["route"]["group_by"]) == {"alertname", "severity"}
+    assert alertmanager["route"]["repeat_interval"] == "4h"
+    webhook = alertmanager["receivers"][0]["webhook_configs"][0]
+    assert webhook == {
+        "url": "http://alert-drill-receiver:8080/alerts",
+        "send_resolved": True,
+    }
 
 
 def test_ci_exercises_compose_postgres_backup_and_restore():
@@ -216,15 +244,22 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert workflow.count("actions/checkout@v5") == 4
     assert workflow.count("actions/setup-python@v6") == 2
     assert "actions/setup-node@v5" in workflow
-    assert "actions/upload-artifact@v7" in workflow
+    assert workflow.count("actions/upload-artifact@v7") == 3
     assert "severity: CRITICAL" in workflow
     assert "ignore-unfixed: true" in workflow
     assert 'exit-code: "1"' in workflow
     assert "down --volumes --remove-orphans" in workflow
-    assert "Validate Prometheus configuration and alert rules" in workflow
+    assert "Validate Prometheus and Alertmanager configuration" in workflow
     assert "promtool" in workflow
     assert "check config /etc/prometheus/prometheus.yml" in workflow
     assert "check rules /etc/prometheus/alerts.yml" in workflow
+    assert "amtool" in workflow
+    assert "check-config /etc/alertmanager/alertmanager.yml" in workflow
+    assert "Exercise Alertmanager notification routing" in workflow
+    assert "/api/v2/alerts" in workflow
+    assert "output/alertmanager-drill.json" in workflow
+    assert "SapAiFlowAcceptanceDrill" in workflow
+    assert "deployment-acceptance" in workflow
 
 
 def test_ci_renders_docx_with_libreoffice_poppler_and_chinese_fonts():

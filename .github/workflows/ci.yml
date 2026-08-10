@@ -90,7 +90,7 @@ jobs:
       CORS_ORIGINS: http://localhost:8080
     steps:
       - uses: actions/checkout@v5
-      - name: Validate Prometheus configuration and alert rules
+      - name: Validate Prometheus and Alertmanager configuration
         run: |
           docker run --rm --entrypoint promtool \
             --volume "$PWD/deploy/monitoring:/etc/prometheus:ro" \
@@ -100,6 +100,10 @@ jobs:
             --volume "$PWD/deploy/monitoring:/etc/prometheus:ro" \
             prom/prometheus:v3.5.0 \
             check rules /etc/prometheus/alerts.yml
+          docker run --rm --entrypoint amtool \
+            --volume "$PWD/deploy/monitoring:/etc/alertmanager:ro" \
+            prom/alertmanager:v0.28.1 \
+            check-config /etc/alertmanager/alertmanager.yml
       - name: Prepare acceptance output
         run: mkdir -p output
       - name: Build Compose images
@@ -161,6 +165,50 @@ jobs:
           docker compose -f deploy/docker-compose.yml exec -T api alembic current \
             | tee output/alembic-current.txt
           grep -q '20260810_0009 (head)' output/alembic-current.txt
+      - name: Exercise Alertmanager notification routing
+        run: |
+          docker compose -f deploy/docker-compose.yml --profile monitoring up -d \
+            alert-drill-receiver alertmanager prometheus
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:9093/-/ready > /dev/null && \
+              curl --fail --silent http://127.0.0.1:9090/-/ready > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:9093/-/ready > /dev/null
+          curl --fail --silent http://127.0.0.1:9090/-/ready > /dev/null
+          python - <<'PY'
+          import json
+          from datetime import UTC, datetime, timedelta
+
+          now = datetime.now(UTC)
+          payload = [{
+              "labels": {
+                  "alertname": "SapAiFlowAcceptanceDrill",
+                  "severity": "critical",
+              },
+              "annotations": {"summary": "Synthetic CI notification route drill"},
+              "startsAt": now.isoformat(),
+              "endsAt": (now + timedelta(minutes=5)).isoformat(),
+          }]
+          with open("output/alertmanager-drill-request.json", "w", encoding="utf-8") as handle:
+              json.dump(payload, handle)
+          PY
+          curl --fail --silent --show-error \
+            --header 'Content-Type: application/json' \
+            --data-binary @output/alertmanager-drill-request.json \
+            http://127.0.0.1:9093/api/v2/alerts
+          for attempt in {1..30}; do
+            if docker compose -f deploy/docker-compose.yml exec -T api \
+              python -c "import urllib.request; print(urllib.request.urlopen('http://alert-drill-receiver:8080/events').read().decode())" \
+              > output/alertmanager-drill.json && \
+              python -c "import json; p=json.load(open('output/alertmanager-drill.json')); assert any(e['alertname']=='SapAiFlowAcceptanceDrill' and e['severity']=='critical' and e['status']=='firing' for e in p['events']), p"; then
+              break
+            fi
+            sleep 1
+          done
+          python -c "import json; p=json.load(open('output/alertmanager-drill.json')); assert p['status']=='ok' and p['event_count']>=1 and all(set(e)=={'received_at','alertname','severity','status'} for e in p['events']), p"
       - name: Exercise PostgreSQL multi-worker fencing
         run: |
           docker compose -f deploy/docker-compose.yml up -d --scale worker=2 worker
@@ -196,6 +244,18 @@ jobs:
             psql --username "$POSTGRES_USER" --dbname sap_blueprint_restore \
               --tuples-only --no-align --command 'SELECT version_num FROM alembic_version;')"
           test "$restored_head" = "20260810_0009"
+      - name: Upload deployment acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deployment-acceptance
+          path: |
+            output/readiness.json
+            output/alembic-current.txt
+            output/alertmanager-drill.json
+            output/export-worker-acceptance.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Show Compose diagnostics on failure
         if: failure()
         run: |

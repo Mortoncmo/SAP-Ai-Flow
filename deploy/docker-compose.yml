@@ -159,6 +159,47 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      alertmanager:
+        condition: service_started
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    profiles: ["monitoring"]
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
+    depends_on:
+      alert-drill-receiver:
+        condition: service_healthy
+    restart: unless-stopped
+
+  alert-drill-receiver:
+    image: sap-ai-flow-api:${SAP_FLOW_IMAGE_TAG:-local}
+    profiles: ["monitoring"]
+    command: ["python", "-m", "app.monitoring.alert_drill_receiver"]
+    environment:
+      ALERT_DRILL_PORT: "8080"
+    expose:
+      - "8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 2s
     restart: unless-stopped
 
 volumes:
@@ -166,3 +207,4 @@ volumes:
   chroma-data:
   export-data:
   prometheus-data:
+  alertmanager-data:
