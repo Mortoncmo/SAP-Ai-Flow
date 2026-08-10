@@ -28,7 +28,7 @@ async page => {
 
     stage = 'starting authorization code flow'
     await signIn.click()
-    await page.waitForURL(url => url.startsWith(`${oidcOrigin}/ci/authorize`))
+    await page.waitForURL(url => url.href.startsWith(`${oidcOrigin}/ci/authorize`))
     const authorization = new URL(page.url())
     assert(authorization.searchParams.get('response_type') === 'code', 'OIDC did not use code flow')
     assert(authorization.searchParams.get('client_id') === 'sap-ai-flow-ci-web', 'OIDC client id mismatch')
@@ -42,7 +42,7 @@ async page => {
     stage = 'submitting test identity'
     await page.locator('input[name="username"]').fill(userId)
     await page.locator('input[type="submit"]').click()
-    await page.waitForURL(url => url.startsWith(`${appOrigin}/auth/callback`))
+    await page.waitForURL(url => url.href.startsWith(`${appOrigin}/auth/callback`))
     const identity = page.locator('.auth-control__identity')
     await identity.waitFor()
     assert(await identity.textContent() === 'CI SAP Consultant', 'OIDC display name was not rendered')
@@ -73,7 +73,7 @@ async page => {
 
     stage = 'logging out'
     await page.getByRole('button', { name: '\u9000\u51fa\u767b\u5f55' }).click()
-    await page.waitForURL(url => url.startsWith(`${appOrigin}/`))
+    await page.waitForURL(url => url.href.startsWith(`${appOrigin}/`))
     await page.getByRole('button', { name: '\u767b\u5f55' }).waitFor()
     assert(
       await page.locator('select[aria-label="\u9879\u76ee"]').isDisabled(),

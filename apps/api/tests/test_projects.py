@@ -1568,6 +1568,8 @@ def test_long_export_heartbeat_prevents_false_stale_reclaim(
 
     monkeypatch.setattr(export_service, "render_export", slow_render_export)
     outcome: dict[str, object] = {}
+    stale_minutes = 0.01
+    heartbeat_seconds = 0.05
 
     def run_export() -> None:
         try:
@@ -1575,8 +1577,8 @@ def test_long_export_heartbeat_prevents_false_stale_reclaim(
                 export_id,
                 database.engine,
                 retention_hours=24,
-                stale_minutes=0.001,
-                heartbeat_seconds=0.01,
+                stale_minutes=stale_minutes,
+                heartbeat_seconds=heartbeat_seconds,
             )
         except BaseException as exc:
             outcome["error"] = exc
@@ -1585,7 +1587,8 @@ def test_long_export_heartbeat_prevents_false_stale_reclaim(
     thread.start()
     assert render_started.wait(timeout=2)
     try:
-        sleep(0.1)
+        # Keep the render running beyond the stale window while the heartbeat renews the lease.
+        sleep(stale_minutes * 60 + 0.15)
         with database.session_factory() as session:
             repository = BlueprintRepository(session)
             running = repository.require_export_job_unscoped(export_id)
@@ -1594,10 +1597,10 @@ def test_long_export_heartbeat_prevents_false_stale_reclaim(
             assert running.started_at is not None
             assert running.heartbeat_at > running.started_at
             assert export_id not in repository.list_export_job_candidates(
-                stale_minutes=0.001,
+                stale_minutes=stale_minutes,
                 limit=10,
             )
-            assert repository.claim_export_job(export_id, stale_minutes=0.001) is None
+            assert repository.claim_export_job(export_id, stale_minutes=stale_minutes) is None
     finally:
         release_render.set()
         thread.join(timeout=3)
