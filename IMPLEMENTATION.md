@@ -1,6 +1,6 @@
 # SAP Blueprint AI Agent 实施规格
 
-> 文档状态：新版 Markdown 逐章整合、租户隔离、Alertmanager、滚动中断与目标 S3 验收基线 4.9
+> 文档状态：新版 Markdown 逐章整合、租户隔离、Alertmanager、滚动中断与目标 S3 验收基线 4.10
 >
 > 实施状态校准：2026-08-10（以当前代码与自动化测试为准）
 >
@@ -283,6 +283,7 @@
 - GitHub Actions 运行 `31374798367` 对提交 `13fe8a8` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过，确认监控验收记录提交未改变 0009、租户隔离、双 Worker、文件系统交付物、PostgreSQL 备份恢复和 DOCX 渲染基线。
 - GitHub Actions 运行 `31377108914` 对提交 `9941087` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过，确认目标 S3 验收工具与文档提交未改变 0009、租户隔离、双 Worker、文件系统交付物、PostgreSQL 备份恢复和 DOCX 渲染基线。
 - GitHub Actions 运行 `31380969503` 对提交 `4e58a8b` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过；deploy 通过 `amtool check-config`、Alertmanager/Prometheus readiness、monitoring profile 和 `SapAiFlowAcceptanceDrill` 回调演练，并上传 `deployment-acceptance` 证据包。该证据证明仓库内通知链路可运行，不替代企业通知渠道、集中日志保留和目标环境演练签字。
+- GitHub Actions 运行 `31383523298` 对提交 `5195f5d` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过。`deploy` 对 80 节点 DOCX 启动独立 Worker，确认任务已领取并发生心跳续租后执行 `docker kill`，等待 65 秒真实陈旧窗口再启动替代 Worker；验收返回 `status=passed`、`database_backend=postgresql`、`artifact_storage=filesystem`、`interrupted_attempt_count=2`、`replacement_completed=true`、`database_content_empty=true`、`content_length=125018`，并将结果纳入 `deployment-acceptance` 证据包。该 CI 关闭仓库 Compose 基线的进程级中断恢复风险，不替代目标部署控制器、实际最大文档、资源上限和运维演练签字。
 
 ### 3.5 基线迁移原则
 
