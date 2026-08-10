@@ -255,7 +255,7 @@
 
 ### 3.4 本轮验证记录（2026-08-10）
 
-- 后端 `ruff check .` 通过，pytest 覆盖成员新增、无变化更新、角色变更和移除的原子审计，以及同一 subject 在不同 OIDC 租户间的项目隔离；同时包含文件系统/S3 交付物存储、SHA-256 完整性、过期删除重试、租约丢失补偿删除和生产数据库存储回退门禁；并继续覆盖 LangGraph 纯结构/SAP 专业意图路由、证据不足与待确认分支、文档导出预检、知识故障下纯画布修改、Worker 租约与交付物、迁移、容量契约、部署红线、RAG/GAP 评估、持久化与权限、连线原子操作、Provider 时限/缓存、JWT、证据门禁、脱敏、事务回滚和依赖失败保图。
+- 后端 `ruff check .` 通过，pytest 120 项通过，覆盖成员新增、无变化更新、角色变更和移除的原子审计，以及同一 subject 在不同 OIDC 租户间的项目、流程和知识接口隔离；同时包含文件系统/S3 交付物存储、SHA-256 完整性、过期删除重试、租约丢失补偿删除和生产数据库存储回退门禁；并继续覆盖 LangGraph 纯结构/SAP 专业意图路由、证据不足与待确认分支、文档导出预检、知识故障下纯画布修改、Worker 租约与交付物、迁移、容量契约、部署红线、RAG/GAP 评估、持久化与权限、连线原子操作、Provider 时限/缓存、JWT、证据门禁、脱敏、事务回滚和依赖失败保图。
 - 依赖/导出失败回归通过：知识服务和 Provider 故障分别返回稳定错误；DOCX 渲染故障返回通用 500；三类失败后当前流程仍为修订 0，修订表与 ChangeLog 无新增记录。
 - SQLite 故障注入在 `ChangeLog` INSERT 阶段抛出 `OperationalError`，验证 API 返回安全的 `DATABASE_WRITE_FAILED`（503）并保留请求号；重新打开 Session 后流程修订号、修订表和 ChangeLog 均无部分更新。
 - 模型缓存专项回归覆盖 TTL、LRU、8 个相同并发请求只调用一次 Provider、失败不缓存、最后等待者取消后终止上游任务、跨项目/流程隔离和命中后重新执行证据校验；数据库故障注入还验证首次外部调用成功但事务回滚后，相同重试从缓存恢复，Provider 总调用次数仍为 1，最终只保存 1 个修订和 1 条 ChangeLog。
@@ -273,6 +273,7 @@
 - GitHub Actions 运行 `31316347775` 对提交 `21656e5` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过。`deploy` 启动 PostgreSQL/API/Web 并确认两个 Worker 都为健康状态，readiness 确认为 PostgreSQL 和 `export_execution=worker`，Alembic 为 `20260809_0006 (head)`；多 Worker 验收返回 `status=passed`、`parallel_job_count=12`、`exactly_once_job_count=12`、`stale_attempt_count=2`、`stale_write_rejected=true`、`content_length=16107`，随后 `pg_dump` 恢复到独立数据库并再次确认迁移头为 0006。`docx-render` 继续通过 LibreOffice Writer、Poppler 和 Noto CJK 的 5 页 PDF/PNG 门禁。
 - GitHub Actions 运行 `31355418269` 对提交 `4203812` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过。`deploy` 确认 Alembic 为 `20260809_0007 (head)`，两个 Worker 健康；验收返回 `parallel_job_count=12`、`exactly_once_job_count=12`、`stale_attempt_count=2`、`stale_write_rejected=true`、`fresh_heartbeat_preserved=true`、`content_length=16107`，备份恢复后的迁移头仍为 0007。
 - GitHub Actions 运行 `31358163552` 对提交 `649e174` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过。`deploy` readiness 确认 PostgreSQL、`export_execution=worker`、`artifact_storage=filesystem` 和 `artifact_storage_status=ready`，Alembic 为 `20260810_0008 (head)`；共享文件系统导出验收返回 `database_content_empty=true`、`parallel_job_count=12`、`exactly_once_job_count=12`、`stale_attempt_count=2`、`stale_write_rejected=true`、`fresh_heartbeat_preserved=true`、`content_length=16107`，备份恢复后的迁移头仍为 0008。该 CI 证明仓库默认生产 Compose 的交付物与数据库隔离，不替代目标企业 S3/文档库注册、卷归档恢复和正式交付签字。
+- GitHub Actions 运行 `31369547593` 对提交 `1177e02` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过。`deploy` readiness 确认 `tenant_isolation=oidc_claim_allowlist`、PostgreSQL、`export_execution=worker`、`artifact_storage=filesystem` 和 `artifact_storage_status=ready`，Alembic 为 `20260810_0009 (head)`；共享文件系统双 Worker 验收继续返回 `database_content_empty=true`、`parallel_job_count=12`、`exactly_once_job_count=12`、`stale_attempt_count=2`、`stale_write_rejected=true`、`fresh_heartbeat_preserved=true`、`content_length=16107`，备份恢复后的迁移头仍为 0009。该 CI 证明租户配置门禁和 0009 在干净 PostgreSQL Compose 栈可迁移、备份和恢复，不替代目标 IdP 的真实 tenant claim/存量项目映射联调。
 
 ### 3.5 基线迁移原则
 
@@ -1272,4 +1273,4 @@ V1.0 至少定义以下角色：
 4. 在目标环境完成企业 S3 bucket 或文档库的身份/权限注册、生命周期、版本化和备份恢复；filesystem 方案需完成 `export-data` 卷归档恢复。随后复跑已固化的 DOCX 渲染门禁并完成部署联调和运行维护签字；若目标环境沿用 LibreOffice/Noto CJK，可直接对比 CI 基线，若更换字体或渲染器则必须重新逐页检查。
 5. 结合真实外部模型容量和命中率结果调整缓存 TTL/容量，并决定多实例环境是否引入分布式缓存；Python SDK、CLI 和 BPMN 保持后续优先级。
 
-当前本机可执行的最终流程编辑验收项、受控交付物存储单元/SQLite 回归、独立 Worker 双进程验收、心跳续租与租约丢失补偿回归、GitHub Actions 0008 Compose/PostgreSQL 双 Worker 共享交付物验收，以及 LibreOffice/Noto CJK DOCX 跨渲染器验收基线已完成。生产验收剩余门槛包括具体身份提供方、知识授权与顾问签字、集中日志、真实外部模型容量、真实长文档滚动中断恢复、企业 S3/文档库注册与备份恢复、目标环境 DOCX 复跑和部署联调。这些项目未验证前不得宣称生产验收完成。
+当前本机可执行的最终流程编辑验收项、OIDC 租户 claim/allowlist 与跨租户隔离、受控交付物存储单元/SQLite 回归、独立 Worker 双进程验收、心跳续租与租约丢失补偿回归、GitHub Actions 0009 Compose/PostgreSQL 双 Worker 共享交付物验收，以及 LibreOffice/Noto CJK DOCX 跨渲染器验收基线已完成。生产验收剩余门槛包括具体身份提供方真实登录和 tenant claim/存量项目映射联调、知识授权与顾问签字、集中日志、真实外部模型容量、真实长文档滚动中断恢复、企业 S3/文档库注册与备份恢复、目标环境 DOCX 复跑和部署联调。这些项目未验证前不得宣称生产验收完成。
