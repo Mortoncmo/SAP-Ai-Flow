@@ -251,6 +251,7 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "oidc_browser_acceptance.js" in workflow
     assert "output/oidc-acceptance.json" in workflow
     assert "authorization_code_pkce" in workflow
+    assert "[REDACTED]" in workflow
     assert "EXPORT_STALE_MINUTES: 1" in workflow
     assert "EXPORT_LEASE_HEARTBEAT_SECONDS: 5" in workflow
     assert "20260810_0009 (head)" in workflow
