@@ -187,23 +187,15 @@ jobs:
           trap cleanup EXIT
           npx --yes --package @playwright/cli@0.1.18 playwright-cli --session "$session" open http://127.0.0.1:8080
           npx --yes --package @playwright/cli@0.1.18 playwright-cli --session "$session" tracing-start >/dev/null
-          if ! browser_output="$(npx --yes --package @playwright/cli@0.1.18 playwright-cli --session "$session" --raw run-code --filename scripts/oidc_browser_acceptance.js 2>&1)"; then
-            printf '%s\n' "$browser_output" | sed -E 's/((code|state|access_token|id_token|refresh_token)=)[^&[:space:]]+/\1[REDACTED]/g; s/("(access_token|id_token|refresh_token)"[[:space:]]*:[[:space:]]*")[^"]+/\1[REDACTED]/g'
+          browser_log="output/oidc-browser-cli.log"
+          if ! npx --yes --package @playwright/cli@0.1.18 playwright-cli --session "$session" \
+            run-code --filename scripts/oidc_browser_acceptance.js > "$browser_log" 2>&1; then
+            sed -E 's/((code|state|access_token|id_token|refresh_token)=)[^&[:space:]]+/\1[REDACTED]/g; s/("(access_token|id_token|refresh_token)"[[:space:]]*:[[:space:]]*")[^"]+/\1[REDACTED]/g' \
+              "$browser_log" > "${browser_log}.sanitized"
+            mv "${browser_log}.sanitized" "$browser_log"
+            cat "$browser_log"
             exit 1
           fi
-          OIDC_BROWSER_RESULT="$browser_output" python - <<'PY'
-          import json
-          import os
-          import sys
-
-          result = json.loads(os.environ["OIDC_BROWSER_RESULT"])
-          if result.get("status") != "passed":
-              stage = result.get("stage", "unknown stage")
-              message = result.get("message", "unknown error")
-              page_path = result.get("page_path", "unavailable")
-              print(f"OIDC acceptance failed at {stage} on {page_path}: {message}", file=sys.stderr)
-              raise SystemExit(1)
-          PY
           tenant_id="$(docker compose -f deploy/docker-compose.yml exec -T postgres psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align --command "SELECT tenant_id FROM project WHERE name = 'OIDC CI Acceptance Project';")"
           test "$tenant_id" = "ci-tenant"
           python - <<'PY'
@@ -352,9 +344,11 @@ jobs:
           name: oidc-browser-failure
           path: |
             output/oidc-failure.png
+            output/oidc-browser-cli.log
             .playwright-cli/traces
             .playwright-cli/page-*.yml
           if-no-files-found: warn
+          include-hidden-files: true
           retention-days: 3
       - name: Show Compose diagnostics on failure
         if: failure()

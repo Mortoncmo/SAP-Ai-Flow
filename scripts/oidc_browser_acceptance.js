@@ -108,11 +108,6 @@ async page => {
       .catch(() => 'unavailable')
     await page.screenshot({ path: 'output/oidc-failure.png', fullPage: true })
       .catch(() => undefined)
-    return {
-      status: 'failed',
-      stage,
-      message: redact(error?.message ?? error),
-      page_path: pagePath,
-    }
+    throw new Error(`[${stage}] on ${pagePath}: ${redact(error?.message ?? error)}`)
   }
 }

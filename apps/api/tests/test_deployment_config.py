@@ -252,17 +252,17 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "output/oidc-acceptance.json" in workflow
     assert "authorization_code_pkce" in workflow
     assert "[REDACTED]" in workflow
-    assert '--raw run-code --filename scripts/oidc_browser_acceptance.js' in workflow
-    assert 'json.loads(os.environ["OIDC_BROWSER_RESULT"])' in workflow
-    assert "OIDC acceptance failed at {stage} on {page_path}" in workflow
+    assert "run-code --filename scripts/oidc_browser_acceptance.js" in workflow
+    assert "--raw run-code" not in workflow
+    assert "OIDC_BROWSER_RESULT" not in workflow
+    assert "output/oidc-browser-cli.log" in workflow
     oidc_acceptance = (ROOT / "scripts" / "oidc_browser_acceptance.js").read_text(
         encoding="utf-8"
     )
     assert "new URL(page.url())" not in oidc_acceptance
     assert "new URL(window.location.href)" in oidc_acceptance
     assert "status: 'passed'" in oidc_acceptance
-    assert "status: 'failed'" in oidc_acceptance
-    assert "page_path: pagePath" in oidc_acceptance
+    assert "throw new Error(`[${stage}] on ${pagePath}" in oidc_acceptance
     assert "page.once('dialog'" in oidc_acceptance
     assert "prompt.accept(projectName)" in oidc_acceptance
     assert "output/oidc-failure.png" in oidc_acceptance
@@ -282,6 +282,7 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "tracing-stop" in workflow
     assert ".playwright-cli/traces" in workflow
     assert "output/oidc-failure.png" in workflow
+    assert "include-hidden-files: true" in workflow
     assert "severity: CRITICAL" in workflow
     assert "ignore-unfixed: true" in workflow
     assert 'exit-code: "1"' in workflow
