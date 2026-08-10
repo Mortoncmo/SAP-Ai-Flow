@@ -19,7 +19,7 @@ SAP AI Flow 是一个面向 SAP 业务流程建模的对话式流程图工具。
 - 项目级外部模型开关、调用前脱敏、本地回退和策略变更审计。
 - 项目/流程隔离的外部 Provider 短期结果缓存，支持 TTL/LRU、相同并发调用合并和命中指标，命中后仍执行证据、Patch、修订和事务校验。
 - SAP MM/P2P 元数据、受控知识检索、GAP 候选与人工决策审计。
-- 项目、流程、修订、发布版本、服务端项目成员角色，以及持久化异步 Markdown/Word 蓝图导出。
+- 项目、流程、修订、发布版本、服务端项目成员角色与可见变更审计，以及持久化异步 Markdown/Word 蓝图导出。
 - ChromaDB 持久化知识索引、确定性字符 n-gram 向量和精确词法混合召回。
 - LangGraph 请求级条件编排：泳道、连线、图标和布局等纯结构修改跳过知识检索；SAP 专业修改进入检索、证据、Provider、原子 Patch 和待确认分支，文档导出执行待确认预检。
 - 开发环境身份头与生产 OIDC/JWKS Bearer JWT 验证边界。
@@ -216,6 +216,8 @@ VITE_OIDC_AUDIENCE=sap-ai-flow
 ```
 
 `VITE_OIDC_REDIRECT_URI` 和 `VITE_OIDC_POST_LOGOUT_REDIRECT_URI` 必须与 Web 应用同源，并在身份提供方登记。开发服务器默认回调为 `http://localhost:5173/auth/callback`；Compose 默认分别使用当前 `http://localhost:8080` 源下的 `/auth/callback` 和 `/`。Vite 变量会写入前端构建产物，修改后必须重新构建 Web 镜像；其中不能放置客户端密钥或其他秘密。
+
+`project_admin` 可在页头的项目访问弹窗中切换“成员 / 审计”标签。成员新增、角色变更、移除和外部模型策略变更均会记录操作者、时间和前后状态；成员写入与审计记录使用同一数据库事务。
 
 生产环境不会信任 `X-User-ID` 或 `X-Project-Role`。缺少 OIDC 配置时 `/health/ready` 返回 503；无项目上下文的流程修改、知识检索和 GAP 分析兼容接口在非开发环境返回 404。
 

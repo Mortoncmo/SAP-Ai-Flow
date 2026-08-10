@@ -451,6 +451,27 @@ async page => {
     }, fixture)
     assert(auditsAfter === auditsBefore + 2, `expected two policy audits, got ${auditsBefore}/${auditsAfter}`)
 
+    stage = 'checking project access audit trail'
+    await memberDialog.getByRole('tab', { name: /\u5ba1\u8ba1/ }).click()
+    const auditPanel = memberDialog.getByRole('tabpanel', { name: '\u9879\u76ee\u8bbf\u95ee\u5ba1\u8ba1' })
+    await auditPanel.waitFor()
+    assert(
+      await auditPanel.locator('.audit-row').filter({ hasText: '\u6dfb\u52a0\u6210\u5458' }).count() >= 1,
+      'member addition is missing from the visible audit trail',
+    )
+    assert(
+      await auditPanel.locator('.audit-row').filter({ hasText: '\u4fee\u6539\u6210\u5458\u89d2\u8272' }).count() >= 2,
+      'member role changes are missing from the visible audit trail',
+    )
+    assert(
+      await auditPanel.locator('.audit-row').filter({ hasText: '\u5916\u90e8\u6a21\u578b\u7b56\u7565' }).count() >= 2,
+      'external-model policy changes are missing from the visible audit trail',
+    )
+    assert(
+      await auditPanel.locator('.audit-row').filter({ hasText: viewerUserId }).count() >= 3,
+      'audit trail does not identify the changed member',
+    )
+
     await assertViewport(390, 844)
     const dialogGeometry = await memberDialog.evaluate(element => ({
       left: element.getBoundingClientRect().left,

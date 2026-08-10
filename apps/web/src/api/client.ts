@@ -13,6 +13,7 @@ import type {
   RevisionDetail,
   GapDecisionResponse,
   ExportJobResponse,
+  ProjectAudit,
   ProjectMember,
   ProjectRole,
 } from '../types'
@@ -141,6 +142,16 @@ export async function listProjectMembers(
 ): Promise<ProjectMember[]> {
   return getJson<ProjectMember[]>(
     `/api/v1/projects/${encodeURIComponent(projectId)}/members`,
+    signal,
+  )
+}
+
+export async function listProjectAudits(
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ProjectAudit[]> {
+  return getJson<ProjectAudit[]>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/audits`,
     signal,
   )
 }

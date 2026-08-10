@@ -190,6 +190,16 @@ export interface ProjectMember {
   updated_at: string
 }
 
+export interface ProjectAudit {
+  id: string
+  project_id: string
+  action: string
+  before_value: Record<string, unknown>
+  after_value: Record<string, unknown>
+  actor_user_id: string
+  created_at: string
+}
+
 export interface ProcessSummary {
   id: string
   project_id: string

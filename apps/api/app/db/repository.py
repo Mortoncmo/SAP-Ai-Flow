@@ -69,17 +69,35 @@ class BlueprintRepository:
             return project
         project.external_model_enabled = external_model_enabled
         project.updated_at = utc_now()
-        audit = ProjectAuditRecord(
-            id=new_id("project-audit"),
+        self._add_project_audit(
             project_id=project.id,
             action="external_model_policy_updated",
             before_value=before,
             after_value=after,
             actor_user_id=actor_user_id,
         )
-        self.session.add(audit)
         self._commit()
         return project
+
+    def _add_project_audit(
+        self,
+        *,
+        project_id: str,
+        action: str,
+        before_value: dict[str, object],
+        after_value: dict[str, object],
+        actor_user_id: str,
+    ) -> None:
+        self.session.add(
+            ProjectAuditRecord(
+                id=new_id("project-audit"),
+                project_id=project_id,
+                action=action,
+                before_value=before_value,
+                after_value=after_value,
+                actor_user_id=actor_user_id,
+            )
+        )
 
     def list_project_audits(self, project_id: str) -> list[ProjectAuditRecord]:
         return list(
@@ -198,6 +216,13 @@ class BlueprintRepository:
             updated_by=actor_user_id,
         )
         self.session.add(member)
+        self._add_project_audit(
+            project_id=project_id,
+            action="project_member_added",
+            before_value={"user_id": user_id, "role": None},
+            after_value={"user_id": user_id, "role": role},
+            actor_user_id=actor_user_id,
+        )
         try:
             self.session.commit()
         except IntegrityError as exc:
@@ -217,11 +242,21 @@ class BlueprintRepository:
         self, *, project_id: str, user_id: str, role: str, actor_user_id: str
     ) -> ProjectMemberRecord:
         member = self.require_project_member(project_id, user_id)
+        if member.role == role:
+            return member
         if member.role == "project_admin" and role != "project_admin":
             self._ensure_another_project_admin(project_id, user_id)
+        previous_role = member.role
         member.role = role
         member.updated_by = actor_user_id
         member.updated_at = utc_now()
+        self._add_project_audit(
+            project_id=project_id,
+            action="project_member_role_updated",
+            before_value={"user_id": user_id, "role": previous_role},
+            after_value={"user_id": user_id, "role": role},
+            actor_user_id=actor_user_id,
+        )
         self._commit()
         return member
 
@@ -231,7 +266,15 @@ class BlueprintRepository:
         member = self.require_project_member(project_id, user_id)
         if member.role == "project_admin":
             self._ensure_another_project_admin(project_id, user_id)
+        previous_role = member.role
         self.session.delete(member)
+        self._add_project_audit(
+            project_id=project_id,
+            action="project_member_removed",
+            before_value={"user_id": user_id, "role": previous_role},
+            after_value={"user_id": user_id, "role": None},
+            actor_user_id=actor_user_id,
+        )
         self._commit()
 
     def _ensure_another_project_admin(self, project_id: str, excluded_user_id: str) -> None:

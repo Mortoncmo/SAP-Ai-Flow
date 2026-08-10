@@ -255,6 +255,58 @@ button {
   color: var(--text-muted);
 }
 
+.member-dialog__tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 3px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+.member-dialog__tabs button {
+  display: inline-flex;
+  min-width: 0;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.member-dialog__tabs button > span {
+  min-width: 20px;
+  padding: 1px 5px;
+  color: var(--text-muted);
+  background: #e6ebe7;
+  border-radius: 9px;
+  font-size: 9px;
+  line-height: 16px;
+}
+
+.member-dialog__tabs button.is-active {
+  color: var(--accent);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(29, 39, 33, 0.09);
+}
+
+.member-dialog__tabs button:focus-visible {
+  outline: 2px solid rgba(23, 107, 77, 0.32);
+  outline-offset: 1px;
+}
+
+.member-dialog > [role='tabpanel'] {
+  display: grid;
+  min-width: 0;
+  gap: 16px;
+}
+
 .member-dialog__policy {
   display: flex;
   min-width: 0;
@@ -418,6 +470,52 @@ button {
 .member-row .icon-button {
   width: 34px;
   height: 34px;
+}
+
+.member-dialog > .member-dialog__audit-list {
+  gap: 0;
+  min-height: 120px;
+}
+
+.audit-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  min-width: 0;
+  padding: 11px 0;
+  border-bottom: 1px solid #edf0ed;
+}
+
+.audit-row__summary,
+.audit-row__meta {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.audit-row__summary strong,
+.audit-row__summary span,
+.audit-row__meta span,
+.audit-row__meta time {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audit-row__summary strong {
+  color: #35433b;
+  font-size: 12px;
+}
+
+.audit-row__summary span,
+.audit-row__meta {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.audit-row__meta {
+  justify-items: end;
 }
 
 .status-dot {
@@ -1428,6 +1526,20 @@ button {
   .member-row {
     grid-template-columns: minmax(0, 1fr) 118px 34px;
     gap: 7px;
+  }
+
+  .audit-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .audit-row__meta {
+    grid-template-columns: minmax(0, 1fr) auto;
+    justify-items: start;
+  }
+
+  .audit-row__meta time {
+    justify-self: end;
   }
 
   .workspace,

@@ -24,6 +24,7 @@ import {
   FilePlus2,
   FileText,
   GitBranchPlus,
+  History,
   ImageDown,
   LayoutDashboard,
   LoaderCircle,
@@ -50,6 +51,7 @@ import {
   exportBlueprint,
   getProcess,
   addProjectMember,
+  listProjectAudits,
   listProcesses,
   listProjectMembers,
   listProjects,
@@ -79,6 +81,7 @@ import { useFlowStore } from './stores/flowStore'
 import type {
   GraphDocument,
   ProcessSummary,
+  ProjectAudit,
   ProjectMember,
   ProjectRole,
   ProjectSummary,
@@ -100,6 +103,46 @@ const projectRoleLabels: Record<ProjectRole, string> = {
   editor: '编辑者',
   consultant_approver: '顾问审批者',
   project_admin: '项目管理员',
+}
+
+const projectAuditLabels: Record<string, string> = {
+  external_model_policy_updated: '外部模型策略',
+  project_member_added: '添加成员',
+  project_member_role_updated: '修改成员角色',
+  project_member_removed: '移除成员',
+}
+
+const auditDateFormatter = new Intl.DateTimeFormat('zh-CN', {
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+})
+
+function projectAuditDescription(audit: ProjectAudit): string {
+  const beforeRole = audit.before_value.role
+  const afterRole = audit.after_value.role
+  const userId = String(audit.after_value.user_id ?? audit.before_value.user_id ?? '')
+  const roleLabel = (value: unknown) => (
+    typeof value === 'string' && value in projectRoleLabels
+      ? projectRoleLabels[value as ProjectRole]
+      : '无'
+  )
+
+  if (audit.action === 'project_member_added') {
+    return `${userId} · ${roleLabel(afterRole)}`
+  }
+  if (audit.action === 'project_member_role_updated') {
+    return `${userId} · ${roleLabel(beforeRole)} → ${roleLabel(afterRole)}`
+  }
+  if (audit.action === 'project_member_removed') {
+    return `${userId} · ${roleLabel(beforeRole)}`
+  }
+  if (audit.action === 'external_model_policy_updated') {
+    return audit.after_value.external_model_enabled ? '切换为允许调用' : '切换为仅本地'
+  }
+  return '已记录项目设置变更'
 }
 
 interface FlowWorkspaceProps {
@@ -141,7 +184,10 @@ function FlowWorkspace({
   const [projectPending, setProjectPending] = useState(false)
   const [memberDialogOpen, setMemberDialogOpen] = useState(false)
   const [members, setMembers] = useState<ProjectMember[]>([])
+  const [projectAudits, setProjectAudits] = useState<ProjectAudit[]>([])
+  const [memberDialogView, setMemberDialogView] = useState<'members' | 'audits'>('members')
   const [memberPending, setMemberPending] = useState(false)
+  const [auditPending, setAuditPending] = useState(false)
   const [policyPending, setPolicyPending] = useState(false)
   const [memberError, setMemberError] = useState('')
   const [newMemberUserId, setNewMemberUserId] = useState('')
@@ -207,6 +253,8 @@ function FlowWorkspace({
   useEffect(() => {
     setMemberDialogOpen(false)
     setMembers([])
+    setProjectAudits([])
+    setMemberDialogView('members')
     setMemberError('')
     setNewMemberUserId('')
     if (!projectId || currentProjectRole !== 'project_admin') return
@@ -302,14 +350,42 @@ function FlowWorkspace({
   const handleOpenMemberDialog = async () => {
     if (!projectId || !canManageMembers) return
     setMemberDialogOpen(true)
+    setMemberDialogView('members')
     setMemberError('')
     setMemberPending(true)
+    setAuditPending(true)
     try {
-      setMembers(await listProjectMembers(projectId))
-    } catch (caught) {
-      setMemberError(caught instanceof Error ? caught.message : '读取项目成员失败')
+      const [memberResult, auditResult] = await Promise.allSettled([
+        listProjectMembers(projectId),
+        listProjectAudits(projectId),
+      ])
+      const errors: string[] = []
+      if (memberResult.status === 'fulfilled') {
+        setMembers(memberResult.value)
+      } else {
+        errors.push(memberResult.reason instanceof Error ? memberResult.reason.message : '读取项目成员失败')
+      }
+      if (auditResult.status === 'fulfilled') {
+        setProjectAudits(auditResult.value)
+      } else {
+        errors.push(auditResult.reason instanceof Error ? auditResult.reason.message : '读取审计记录失败')
+      }
+      setMemberError(errors.join('；'))
     } finally {
       setMemberPending(false)
+      setAuditPending(false)
+    }
+  }
+
+  const refreshProjectAudits = async () => {
+    if (!projectId) return
+    setAuditPending(true)
+    try {
+      setProjectAudits(await listProjectAudits(projectId))
+    } catch (caught) {
+      setMemberError(caught instanceof Error ? caught.message : '读取审计记录失败')
+    } finally {
+      setAuditPending(false)
     }
   }
 
@@ -324,6 +400,7 @@ function FlowWorkspace({
       setMembers((items) => [...items, member])
       setNewMemberUserId('')
       setMessage(`已添加项目成员：${member.user_id}`)
+      await refreshProjectAudits()
     } catch (caught) {
       setMemberError(caught instanceof Error ? caught.message : '添加项目成员失败')
     } finally {
@@ -346,6 +423,7 @@ function FlowWorkspace({
       const updated = await updateProjectSettings(projectId, nextEnabled)
       setProjects((items) => items.map((item) => (item.id === updated.id ? updated : item)))
       setMessage(updated.external_model_enabled ? '项目已允许调用外部模型' : '项目已切换为仅本地模式')
+      await refreshProjectAudits()
     } catch (caught) {
       setMemberError(caught instanceof Error ? caught.message : '更新外部模型策略失败')
     } finally {
@@ -361,6 +439,7 @@ function FlowWorkspace({
       const updated = await updateProjectMember(projectId, member.user_id, role)
       setMembers((items) => items.map((item) => (item.user_id === updated.user_id ? updated : item)))
       setMessage(`已更新 ${updated.user_id} 的项目角色`)
+      await refreshProjectAudits()
     } catch (caught) {
       setMemberError(caught instanceof Error ? caught.message : '更新项目角色失败')
     } finally {
@@ -381,6 +460,7 @@ function FlowWorkspace({
       await removeProjectMember(projectId, member.user_id)
       setMembers((items) => items.filter((item) => item.user_id !== member.user_id))
       setMessage(`已移除项目成员：${member.user_id}`)
+      await refreshProjectAudits()
     } catch (caught) {
       setMemberError(caught instanceof Error ? caught.message : '移除项目成员失败')
     } finally {
@@ -1235,101 +1315,151 @@ function FlowWorkspace({
             <p className="member-dialog__project">
               {currentProject?.name ?? '当前项目'}
             </p>
-            <div className="member-dialog__policy">
-              <div className="member-dialog__policy-copy">
-                <strong>外部模型</strong>
-                <span>{currentProject?.external_model_enabled ? '允许调用' : '仅本地'}</span>
-              </div>
+            <div className="member-dialog__tabs" role="tablist" aria-label="项目访问视图">
               <button
                 type="button"
-                className="policy-switch"
-                role="switch"
-                aria-checked={currentProject?.external_model_enabled ?? false}
-                aria-label="允许调用外部模型"
-                title={currentProject?.external_model_enabled ? '切换为仅本地' : '允许调用外部模型'}
-                disabled={policyPending}
-                onClick={() => void handleExternalModelToggle()}
+                role="tab"
+                aria-selected={memberDialogView === 'members'}
+                className={memberDialogView === 'members' ? 'is-active' : ''}
+                onClick={() => setMemberDialogView('members')}
               >
-                <span aria-hidden="true" />
+                <Users size={15} />
+                成员
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={memberDialogView === 'audits'}
+                className={memberDialogView === 'audits' ? 'is-active' : ''}
+                onClick={() => setMemberDialogView('audits')}
+              >
+                <History size={15} />
+                审计
+                <span>{projectAudits.length}</span>
               </button>
             </div>
-            <form className="member-dialog__add" onSubmit={(event) => void handleAddMember(event)}>
-              <label>
-                用户 ID
-                <input
-                  value={newMemberUserId}
-                  onChange={(event) => setNewMemberUserId(event.target.value)}
-                  placeholder="输入用户 ID"
-                  maxLength={80}
-                  autoComplete="off"
-                />
-              </label>
-              <label>
-                项目角色
-                <select
-                  value={newMemberRole}
-                  onChange={(event) => setNewMemberRole(event.target.value as ProjectRole)}
-                >
-                  {Object.entries(projectRoleLabels).map(([role, label]) => (
-                    <option key={role} value={role}>{label}</option>
-                  ))}
-                </select>
-              </label>
-              <button type="submit" className="secondary-button" disabled={!newMemberUserId.trim() || memberPending}>
-                <UserPlus size={16} />
-                添加成员
-              </button>
-            </form>
             {memberError && <p className="member-dialog__error" role="alert">{memberError}</p>}
-            <div className="member-dialog__list" aria-live="polite">
-              {memberPending && members.length === 0 ? (
-                <p className="member-dialog__empty">正在读取成员…</p>
-              ) : members.length === 0 ? (
-                <p className="member-dialog__empty">暂无项目成员</p>
-              ) : (
-                members.map((member) => (
-                  <div className="member-row" key={member.user_id}>
-                    <div className="member-row__identity">
-                      <strong>{member.user_id}</strong>
-                      <small>由 {member.updated_by} 更新</small>
-                    </div>
+            {memberDialogView === 'members' ? (
+              <div role="tabpanel" aria-label="项目成员与模型策略">
+                <div className="member-dialog__policy">
+                  <div className="member-dialog__policy-copy">
+                    <strong>外部模型</strong>
+                    <span>{currentProject?.external_model_enabled ? '允许调用' : '仅本地'}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="policy-switch"
+                    role="switch"
+                    aria-checked={currentProject?.external_model_enabled ?? false}
+                    aria-label="允许调用外部模型"
+                    title={currentProject?.external_model_enabled ? '切换为仅本地' : '允许调用外部模型'}
+                    disabled={policyPending}
+                    onClick={() => void handleExternalModelToggle()}
+                  >
+                    <span aria-hidden="true" />
+                  </button>
+                </div>
+                <form className="member-dialog__add" onSubmit={(event) => void handleAddMember(event)}>
+                  <label>
+                    用户 ID
+                    <input
+                      value={newMemberUserId}
+                      onChange={(event) => setNewMemberUserId(event.target.value)}
+                      placeholder="输入用户 ID"
+                      maxLength={80}
+                      autoComplete="off"
+                    />
+                  </label>
+                  <label>
+                    项目角色
                     <select
-                      aria-label={`${member.user_id} 的角色`}
-                      value={member.role}
-                      title={
-                        member.role === 'project_admin' && projectAdminCount <= 1
-                          ? '项目必须保留至少一名项目管理员'
-                          : `修改 ${member.user_id} 的角色`
-                      }
-                      disabled={
-                        memberPending || (member.role === 'project_admin' && projectAdminCount <= 1)
-                      }
-                      onChange={(event) => void handleMemberRoleChange(member, event.target.value as ProjectRole)}
+                      value={newMemberRole}
+                      onChange={(event) => setNewMemberRole(event.target.value as ProjectRole)}
                     >
                       {Object.entries(projectRoleLabels).map(([role, label]) => (
                         <option key={role} value={role}>{label}</option>
                       ))}
                     </select>
-                    <button
-                      type="button"
-                      className="icon-button danger"
-                      title={
-                        member.role === 'project_admin' && projectAdminCount <= 1
-                          ? '项目必须保留至少一名项目管理员'
-                          : `移除 ${member.user_id}`
-                      }
-                      aria-label={`移除 ${member.user_id}`}
-                      disabled={
-                        memberPending || (member.role === 'project_admin' && projectAdminCount <= 1)
-                      }
-                      onClick={() => void handleRemoveMember(member)}
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
+                  </label>
+                  <button type="submit" className="secondary-button" disabled={!newMemberUserId.trim() || memberPending}>
+                    <UserPlus size={16} />
+                    添加成员
+                  </button>
+                </form>
+                <div className="member-dialog__list" aria-live="polite">
+                  {memberPending && members.length === 0 ? (
+                    <p className="member-dialog__empty">正在读取成员…</p>
+                  ) : members.length === 0 ? (
+                    <p className="member-dialog__empty">暂无项目成员</p>
+                  ) : (
+                    members.map((member) => (
+                      <div className="member-row" key={member.user_id}>
+                        <div className="member-row__identity">
+                          <strong>{member.user_id}</strong>
+                          <small>由 {member.updated_by} 更新</small>
+                        </div>
+                        <select
+                          aria-label={`${member.user_id} 的角色`}
+                          value={member.role}
+                          title={
+                            member.role === 'project_admin' && projectAdminCount <= 1
+                              ? '项目必须保留至少一名项目管理员'
+                              : `修改 ${member.user_id} 的角色`
+                          }
+                          disabled={
+                            memberPending || (member.role === 'project_admin' && projectAdminCount <= 1)
+                          }
+                          onChange={(event) => void handleMemberRoleChange(member, event.target.value as ProjectRole)}
+                        >
+                          {Object.entries(projectRoleLabels).map(([role, label]) => (
+                            <option key={role} value={role}>{label}</option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className="icon-button danger"
+                          title={
+                            member.role === 'project_admin' && projectAdminCount <= 1
+                              ? '项目必须保留至少一名项目管理员'
+                              : `移除 ${member.user_id}`
+                          }
+                          aria-label={`移除 ${member.user_id}`}
+                          disabled={
+                            memberPending || (member.role === 'project_admin' && projectAdminCount <= 1)
+                          }
+                          onClick={() => void handleRemoveMember(member)}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="member-dialog__audit-list" role="tabpanel" aria-label="项目访问审计" aria-live="polite">
+                {auditPending && projectAudits.length === 0 ? (
+                  <p className="member-dialog__empty">正在读取审计记录…</p>
+                ) : projectAudits.length === 0 ? (
+                  <p className="member-dialog__empty">暂无项目访问变更</p>
+                ) : (
+                  projectAudits.map((audit) => (
+                    <div className="audit-row" key={audit.id}>
+                      <div className="audit-row__summary">
+                        <strong>{projectAuditLabels[audit.action] ?? '项目变更'}</strong>
+                        <span>{projectAuditDescription(audit)}</span>
+                      </div>
+                      <div className="audit-row__meta">
+                        <span>{audit.actor_user_id}</span>
+                        <time dateTime={audit.created_at}>
+                          {auditDateFormatter.format(new Date(audit.created_at))}
+                        </time>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
           </section>
         </div>
       )}

@@ -235,15 +235,73 @@ def test_external_model_policy_requires_admin_opt_in_and_is_audited(persistence_
 
     audits = client.get(f"/api/v1/projects/{project_id}/audits")
     assert audits.status_code == 200, audits.text
-    assert [item["after_value"] for item in audits.json()] == [
+    policy_audits = [
+        item for item in audits.json() if item["action"] == "external_model_policy_updated"
+    ]
+    assert [item["after_value"] for item in policy_audits] == [
         {"external_model_enabled": False},
         {"external_model_enabled": True},
     ]
-    assert all(item["actor_user_id"] == "local-user" for item in audits.json())
+    assert all(item["actor_user_id"] == "local-user" for item in policy_audits)
 
     session = database.session_factory()
     try:
-        assert len(session.scalars(select(ProjectAuditRecord)).all()) == 2
+        audit_records = session.scalars(select(ProjectAuditRecord)).all()
+        assert len([item for item in audit_records if item.action == "external_model_policy_updated"]) == 2
+    finally:
+        session.close()
+
+
+def test_project_member_changes_are_atomic_and_audited(persistence_client):
+    client, database = persistence_client
+    created = client.post("/api/v1/projects", json={"name": "成员审计验收项目"})
+    assert created.status_code == 201, created.text
+    project_id = created.json()["id"]
+
+    added = client.post(
+        f"/api/v1/projects/{project_id}/members",
+        json={"user_id": "audited-user", "role": "viewer"},
+    )
+    assert added.status_code == 201, added.text
+
+    unchanged = client.put(
+        f"/api/v1/projects/{project_id}/members/audited-user",
+        json={"user_id": "audited-user", "role": "viewer"},
+    )
+    assert unchanged.status_code == 200, unchanged.text
+
+    updated = client.put(
+        f"/api/v1/projects/{project_id}/members/audited-user",
+        json={"user_id": "audited-user", "role": "editor"},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["role"] == "editor"
+
+    removed = client.delete(
+        f"/api/v1/projects/{project_id}/members/audited-user"
+    )
+    assert removed.status_code == 204, removed.text
+
+    audits = client.get(f"/api/v1/projects/{project_id}/audits")
+    assert audits.status_code == 200, audits.text
+    payload = audits.json()
+    assert [item["action"] for item in payload] == [
+        "project_member_removed",
+        "project_member_role_updated",
+        "project_member_added",
+    ]
+    assert payload[0]["before_value"] == {"user_id": "audited-user", "role": "editor"}
+    assert payload[0]["after_value"] == {"user_id": "audited-user", "role": None}
+    assert payload[1]["before_value"] == {"user_id": "audited-user", "role": "viewer"}
+    assert payload[1]["after_value"] == {"user_id": "audited-user", "role": "editor"}
+    assert payload[2]["before_value"] == {"user_id": "audited-user", "role": None}
+    assert payload[2]["after_value"] == {"user_id": "audited-user", "role": "viewer"}
+    assert all(item["actor_user_id"] == "local-user" for item in payload)
+
+    session = database.session_factory()
+    try:
+        assert session.get(ProjectMemberRecord, (project_id, "audited-user")) is None
+        assert len(session.scalars(select(ProjectAuditRecord)).all()) == 3
     finally:
         session.close()
 

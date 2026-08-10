@@ -9,6 +9,7 @@ import {
   API_REQUEST_TIMEOUT_MS,
   ApiError,
   exportBlueprint,
+  listProjectAudits,
   listProjectMembers,
   listProjects,
   removeProjectMember,
@@ -61,6 +62,30 @@ describe('project member client', () => {
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     )
     expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get('X-Request-ID')).toMatch(/^web_[a-f0-9]+$/)
+  })
+
+  it('loads the project access audit trail from the encoded route', async () => {
+    const audit = {
+      id: 'audit-1',
+      project_id: 'project / 1',
+      action: 'project_member_added',
+      before_value: { user_id: member.user_id, role: null },
+      after_value: { user_id: member.user_id, role: 'viewer' },
+      actor_user_id: 'local-user',
+      created_at: '2026-08-10T00:00:00Z',
+    }
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify([audit]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    await expect(listProjectAudits('project / 1')).resolves.toEqual([audit])
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/projects/project%20%2F%201/audits',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
   })
 
   it('uses POST, PUT and DELETE for member mutations', async () => {
