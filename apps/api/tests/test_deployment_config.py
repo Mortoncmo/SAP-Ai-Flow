@@ -255,3 +255,21 @@ def test_capacity_harness_has_release_metrics_and_safety_guards():
     assert "cache_status" in script
     assert "capacity-report-" in script
     assert "capacity-samples-" in script
+
+
+def test_s3_acceptance_harness_has_write_retention_and_redaction_guards():
+    script = (ROOT / "scripts" / "verify_s3_storage.py").read_text(encoding="utf-8")
+    acceptance = (
+        ROOT / "apps" / "api" / "app" / "documents" / "s3_acceptance.py"
+    ).read_text(encoding="utf-8")
+
+    assert "--allow-write" in script
+    assert "EXPORT_STORAGE_BACKEND must be s3" in script
+    assert 'head.get("ServerSideEncryption") != "AES256"' in acceptance
+    assert "get_bucket_versioning" in acceptance
+    assert "get_bucket_lifecycle_configuration" in acceptance
+    assert "S3 probe object is still readable after deletion" in acceptance
+    assert '"bucket": store.bucket' not in acceptance
+    assert '"prefix": store.prefix' not in acceptance
+    assert "_redacted_target_ref" in acceptance
+    assert "noncurrent probe versions remain" in acceptance

@@ -1,6 +1,6 @@
 # SAP Blueprint AI Agent 实施规格
 
-> 文档状态：新版 Markdown 逐章整合、成员变更审计、租户隔离、可观测性与受控交付验收基线 4.6
+> 文档状态：新版 Markdown 逐章整合、成员变更审计、租户隔离、可观测性与目标 S3 验收基线 4.7
 >
 > 实施状态校准：2026-08-10（以当前代码与自动化测试为准）
 >
@@ -219,6 +219,7 @@
 - 前后端自动化测试基线，以及迁移、导出结构和典型项目闭环的回归覆盖。
 - 可自行分配端口并启动当前 API、Web 和隔离 SQLite 数据库的 Playwright CLI smoke；覆盖本地撤销/重做/自动布局/刷新恢复、泳道不误增节点、成员 CRUD 及可见审计、外部模型二次确认与审计、取消/超时/修订冲突恢复、本地 Patch P95、持久化修改/发布/历史回看/新草稿、管理员/查看者权限、异步 Markdown/Word 下载和三种视口。
 - 可配置 API 容量测试脚本：每个样本使用独立流程，按并发级别输出错误率、P50/P95/P99、Provider/模型、`model_calls`、`cache_status` 和 `database_backend`；远程目标强制 Bearer Token，可要求真实外部 Provider 与 PostgreSQL，并在阈值失败后保留机器可读报告再返回非零。
+- 真实 S3 交付物验收脚本：必须显式传入 `--allow-write` 后才会向目标 bucket 写入唯一探针；验证上传/下载、SHA-256、长度、AES256 服务端加密、版本化、配置 prefix 的生命周期覆盖和删除后不可读，并输出不包含 bucket、prefix 或密钥明文的 JSON 报告。
 - 版本化 MM/P2P 验收场景和 PowerShell API 演示脚本；可重复完成项目创建、Agent 建图、连线修改、发布、创建两个持久化导出任务并下载双格式蓝图，输出包含两个 `export_id` 的验收摘要。
 
 ### 3.2 尚未完成
@@ -228,7 +229,7 @@
 - 具体 SSO/OIDC 身份提供方的客户端注册、真实登录/退出和真实 tenant claim 映射联调尚未完成；通用 SPA PKCE、Bearer Token、租户 allowlist、项目租户归属和跨租户 404 隔离已完成，`X-User-ID` 仅保留在开发环境。
 - 容器基础镜像和操作系统包 Trivy 扫描、CycloneDX SBOM 和可修复 Critical 门禁已接入部署 CI；未修复发现仍保留在日志/构件中。低基数 Prometheus 指标、scrape 配置、告警规则与 promtool 门禁已完成；集中日志采集/保留策略、生产监控平台接入、告警通知路由和演练尚未完成。应用级请求/异常/审计脱敏与秘密扫描已具备自动化红线测试。
 - Python SDK、CLI 和 BPMN 导出。
-- 受控交付物存储代码已实现 `database`（仅开发）、`filesystem`（生产 Compose 默认）和 `s3`（S3 兼容对象存储）三种后端；目标环境仍需完成企业 bucket/文档库注册、工作负载身份、生命周期、备份恢复和正式交付归档签字，不能把 CI 文件系统卷验收当成企业文档库签字。
+- 受控交付物存储代码已实现 `database`（仅开发）、`filesystem`（生产 Compose 默认）和 `s3`（S3 兼容对象存储）三种后端，并已固化会执行真实写入的目标 S3 验收脚本；该脚本尚未对企业 bucket 实跑。目标环境仍需完成工作负载身份、生命周期、备份恢复和正式交付归档签字，不能把本地 Fake S3/CI 文件系统卷验收当成企业文档库签字。
 - 独立 Worker 已在本地 SQLite 双进程回归和 GitHub PostgreSQL 双 Worker 场景完成领取、心跳续租、并发恰好一次、心跳新鲜任务保留和陈旧租约接管；真实长文档超过陈旧阈值的渲染耗时、滚动中断恢复与容量上限仍需目标环境验证。
 - 当前机器无 Docker CLI 和 LibreOffice，不能提供本机 Compose 或 DOCX PNG 渲染证据；镜像 build/up、PostgreSQL readiness、迁移、备份恢复及 LibreOffice/Noto CJK DOCX 渲染已由 GitHub Ubuntu runner 验收通过。目标部署若使用不同字体或渲染器，仍需重跑并纳入运维签字。
 - 生产备份、恢复、迁移、文件系统导出卷/S3 交付物和 readiness 操作已写入 `deploy/OPERATIONS.md`，真实卷归档、S3 版本恢复与目标运维演练仍需 Docker/目标环境。
@@ -252,10 +253,11 @@
 - 当前 LangGraph 只编排请求级状态：纯泳道/连线/图标/布局修改不再依赖知识服务，SAP 专业修改保留检索、证据不足、外部模型策略、原子 Patch、证据校验和待确认分支；编排成功后才由现有 Repository 保存修订和 ChangeLog。文档导出增加待确认预检分支，渲染仍复用同一 `BlueprintDocumentModel`。
 - 当前外部 Provider 缓存只在项目明确开启外部模型后参与持久化修改；相同请求首次为 `miss`，TTL 内重复请求为 `hit`，同一事件循环的并发重复请求为 `shared`，本地规则或禁用缓存时为 `bypassed`。缓存命中仍重新执行证据验证、原子 Patch、修订冲突和数据库事务；数据库保存失败后的相同重试可复用 Provider 结果，但失败事务本身不会产生修订或 ChangeLog。
 - 当前部署配置已具备稳定镜像命名、独立 Worker 健康检查、共享文件系统交付物卷和可重复的 Compose/PostgreSQL 验收入口；GitHub Actions 已固化租户 allowlist readiness、0009 迁移、对象不落数据库、普通任务恰好一次、心跳新鲜任务保留、陈旧租约接管、旧 Token 栅栏、备份和恢复。
+- 当前目标 S3 验收工具只在操作者显式确认写入后运行，报告使用 bucket/prefix 的 SHA-256 短指纹，不输出访问密钥或目标名称；`DeleteObject` 验证的是当前对象已不可读。版本化 bucket 会生成删除标记，非当前探针版本仍由目标生命周期、保留和备份策略负责清理或恢复，不能把“删除不可读”解释为所有版本已物理清除。
 
 ### 3.4 本轮验证记录（2026-08-10）
 
-- 后端 `ruff check .` 通过，pytest 122 项通过，覆盖成员新增、无变化更新、角色变更和移除的原子审计，同一 subject 在不同 OIDC 租户间的项目/流程/知识接口隔离，以及 Prometheus 路由模板低基数与敏感标识不泄露；同时包含文件系统/S3 交付物存储、SHA-256 完整性、过期删除重试、租约丢失补偿删除和生产数据库存储回退门禁；并继续覆盖 LangGraph 纯结构/SAP 专业意图路由、证据不足与待确认分支、文档导出预检、知识故障下纯画布修改、Worker 租约与交付物、迁移、容量契约、部署红线、RAG/GAP 评估、持久化与权限、连线原子操作、Provider 时限/缓存、JWT、证据门禁、脱敏、事务回滚和依赖失败保图。
+- 后端 `ruff check .` 通过，pytest 126 项通过，新增覆盖目标 S3 验收探针成功往返、AES256、版本化、生命周期覆盖、删除后不可读、失败清理和报告脱敏；同时覆盖成员新增、无变化更新、角色变更和移除的原子审计，同一 subject 在不同 OIDC 租户间的项目/流程/知识接口隔离，以及 Prometheus 路由模板低基数与敏感标识不泄露；并继续覆盖文件系统/S3 交付物存储、SHA-256 完整性、过期删除重试、租约丢失补偿删除、生产数据库存储回退、LangGraph 路由、证据不足、文档导出预检、Worker 租约、迁移、容量契约、RAG/GAP、权限、连线原子操作、Provider 时限/缓存、JWT、脱敏、事务回滚和依赖失败保图。
 - 依赖/导出失败回归通过：知识服务和 Provider 故障分别返回稳定错误；DOCX 渲染故障返回通用 500；三类失败后当前流程仍为修订 0，修订表与 ChangeLog 无新增记录。
 - SQLite 故障注入在 `ChangeLog` INSERT 阶段抛出 `OperationalError`，验证 API 返回安全的 `DATABASE_WRITE_FAILED`（503）并保留请求号；重新打开 Session 后流程修订号、修订表和 ChangeLog 均无部分更新。
 - 模型缓存专项回归覆盖 TTL、LRU、8 个相同并发请求只调用一次 Provider、失败不缓存、最后等待者取消后终止上游任务、跨项目/流程隔离和命中后重新执行证据校验；数据库故障注入还验证首次外部调用成功但事务回滚后，相同重试从缓存恢复，Provider 总调用次数仍为 1，最终只保存 1 个修订和 1 条 ChangeLog。
@@ -275,6 +277,7 @@
 - GitHub Actions 运行 `31358163552` 对提交 `649e174` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过。`deploy` readiness 确认 PostgreSQL、`export_execution=worker`、`artifact_storage=filesystem` 和 `artifact_storage_status=ready`，Alembic 为 `20260810_0008 (head)`；共享文件系统导出验收返回 `database_content_empty=true`、`parallel_job_count=12`、`exactly_once_job_count=12`、`stale_attempt_count=2`、`stale_write_rejected=true`、`fresh_heartbeat_preserved=true`、`content_length=16107`，备份恢复后的迁移头仍为 0008。该 CI 证明仓库默认生产 Compose 的交付物与数据库隔离，不替代目标企业 S3/文档库注册、卷归档恢复和正式交付签字。
 - GitHub Actions 运行 `31369547593` 对提交 `1177e02` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过。`deploy` readiness 确认 `tenant_isolation=oidc_claim_allowlist`、PostgreSQL、`export_execution=worker`、`artifact_storage=filesystem` 和 `artifact_storage_status=ready`，Alembic 为 `20260810_0009 (head)`；共享文件系统双 Worker 验收继续返回 `database_content_empty=true`、`parallel_job_count=12`、`exactly_once_job_count=12`、`stale_attempt_count=2`、`stale_write_rejected=true`、`fresh_heartbeat_preserved=true`、`content_length=16107`，备份恢复后的迁移头仍为 0009。该 CI 证明租户配置门禁和 0009 在干净 PostgreSQL Compose 栈可迁移、备份和恢复，不替代目标 IdP 的真实 tenant claim/存量项目映射联调。
 - GitHub Actions 运行 `31373701595` 对提交 `9520a03` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过。官方 `promtool` 确认 `prometheus.yml` 配置有效且发现 1 个规则文件，`alerts.yml` 的 3 条规则全部有效；API 作业包含新增 `prometheus-client` 的依赖审计，Compose 作业继续通过租户 readiness、0009、双 Worker、文件系统交付物和 PostgreSQL 备份恢复门禁。该 CI 关闭仓库内指标格式、PromQL 语法和配置装配风险，不替代目标 Prometheus/Alertmanager、集中日志保留和通知演练。
+- GitHub Actions 运行 `31374798367` 对提交 `13fe8a8` 的 API、Web、`docx-render` 和 `deploy` 四个作业全部通过，确认监控验收记录提交未改变 0009、租户隔离、双 Worker、文件系统交付物、PostgreSQL 备份恢复和 DOCX 渲染基线。
 
 ### 3.5 基线迁移原则
 
@@ -1181,6 +1184,7 @@ V1.0 至少定义以下角色：
 - [x] 加入页眉、页脚、版本、流程图和表格。
 - [x] 实现持久化异步导出任务、`export_id` 状态查询、失败/过期处理、陈旧任务恢复和下载接口；开发数据库后端兼容 SQLite，生产文件系统/S3 后端将二进制与 PostgreSQL 分离并在下载时校验 SHA-256。
 - [x] 实现独立导出 Worker、开发/生产执行模式分离、租约 Token 栅栏、尝试次数和本地双进程验收。
+- [x] 固化目标 S3 写入验收工具，覆盖 AES256、SHA-256/长度、bucket 版本化、配置 prefix 生命周期覆盖、删除后不可读和脱敏 JSON 报告；工具未对真实企业 bucket 执行前不关闭外部存储验收。
 - [x] 前端接入任务创建、250 毫秒轮询和完成后下载，并保持 44 秒统一截止时间和显式取消语义。
 - [x] 使用 LibreOffice、Poppler 和 Noto CJK 验证中文字体、横竖分页、长表格禁拆行和流程图清晰度，并上传 DOCX/PDF/逐页 PNG/字体/报告证据。
 - [x] 对比 Word 与 Markdown 共用内容模型的结构。
@@ -1206,6 +1210,8 @@ V1.0 至少定义以下角色：
 - [x] 完成 GitHub Actions 干净 Compose build/up、readiness、迁移和 PostgreSQL 备份恢复验收；本轮新增的导出交付物卷归档/恢复由目标环境门槛跟踪。
 - [x] 完成独立 Worker 的 GitHub PostgreSQL 任务执行、0009 迁移、共享文件系统交付物和数据库不存二进制验收；PostgreSQL 备份恢复仍需同时按目标后端归档导出卷或 S3 对象。
 - [x] 完成两个 Worker 的 12 任务恰好一次、心跳新鲜任务不接管、陈旧租约单次接管和旧 Token 写回拒绝验收。
+- [x] 完成真实 S3 验收脚本及单元/静态红线测试，要求显式写入确认、AES256、版本化、生命周期覆盖、删除可见性和目标名称脱敏。
+- [ ] 在企业 bucket 使用目标工作负载身份执行 S3 验收脚本，归档脱敏报告，并完成非当前版本清理、备份恢复和保留策略签字。
 - [ ] 完成目标环境部署、集中日志/告警和运行维护签字。
 - [x] 完成 `.dockerignore`、强制数据库密码、API 内网端口、Web 健康检查和数据库 readiness 的静态部署红线测试。
 - [x] 完成数据库迁移、备份恢复和故障排查文档；真实 PostgreSQL 演练仍由 Week 6 独立验收项跟踪。
@@ -1253,6 +1259,8 @@ V1.0 至少定义以下角色：
 - [x] Markdown 与 Word 可通过持久化 `export_id` 查询状态并在完成后下载，失败或过期时返回稳定错误。
 - [x] 独立 Worker 的领取、尝试次数和租约 Token 栅栏已通过本地双进程与自动化测试。
 - [x] 生产配置禁止 `database` 导出后端；filesystem/S3 后端将二进制移出 PostgreSQL，下载校验长度和 SHA-256，过期对象删除失败可重试。
+- [x] 目标 S3 验收工具具备显式写入确认、真实读写、AES256、版本化、生命周期覆盖、删除后不可读和报告目标脱敏门禁。
+- [ ] 企业 S3/文档库已实跑验收并证明非当前版本生命周期、备份恢复、正式保留和运维责任边界。
 
 ### 稳定性与安全
 
@@ -1273,7 +1281,7 @@ V1.0 至少定义以下角色：
 1. 在目标 SSO/OIDC 身份提供方登记 SPA 客户端、回调地址和 API audience，完成真实登录、退出、Token 刷新/过期及部署联调；通用 Authorization Code + PKCE、Bearer Token 注入和应用日志治理已完成。
 2. 完成知识来源/授权顾问审核、正式标注集和生产语义嵌入模型对比；ChromaDB 持久化、离线混合召回和固定自动化评估集已完成。
 3. 使用已固化的容量脚本在真实外部模型/PostgreSQL 环境完成并发、长尾和容量测试并归档 JSON/CSV；对渲染时间超过陈旧阈值的长文档执行 Worker 滚动中断恢复，确认轮询批量、陈旧阈值和实例数上限。
-4. 在目标环境完成企业 S3 bucket 或文档库的身份/权限注册、生命周期、版本化和备份恢复；filesystem 方案需完成 `export-data` 卷归档恢复。随后复跑已固化的 DOCX 渲染门禁并完成部署联调和运行维护签字；若目标环境沿用 LibreOffice/Noto CJK，可直接对比 CI 基线，若更换字体或渲染器则必须重新逐页检查。
+4. 在目标环境完成企业 S3 bucket 或文档库的身份/权限注册，使用 `scripts/verify_s3_storage.py --allow-write` 验证真实读写、AES256、版本化、生命周期覆盖和删除可见性并归档脱敏 JSON 报告；另行检查删除标记与非当前版本的清理/恢复策略，因为一次 `DeleteObject` 不会物理清除版本化 bucket 的旧版本。filesystem 方案需完成 `export-data` 卷归档恢复。随后复跑已固化的 DOCX 渲染门禁并完成部署联调和运行维护签字；若目标环境沿用 LibreOffice/Noto CJK，可直接对比 CI 基线，若更换字体或渲染器则必须重新逐页检查。
 5. 结合真实外部模型容量和命中率结果调整缓存 TTL/容量，并决定多实例环境是否引入分布式缓存；Python SDK、CLI 和 BPMN 保持后续优先级。
 
-当前本机可执行的最终流程编辑验收项、OIDC 租户 claim/allowlist 与跨租户隔离、受控交付物存储单元/SQLite 回归、独立 Worker 双进程验收、心跳续租与租约丢失补偿回归、GitHub Actions 0009 Compose/PostgreSQL 双 Worker 共享交付物验收，以及 LibreOffice/Noto CJK DOCX 跨渲染器验收基线已完成。生产验收剩余门槛包括具体身份提供方真实登录和 tenant claim/存量项目映射联调、知识授权与顾问签字、集中日志、真实外部模型容量、真实长文档滚动中断恢复、企业 S3/文档库注册与备份恢复、目标环境 DOCX 复跑和部署联调。这些项目未验证前不得宣称生产验收完成。
+当前本机可执行的最终流程编辑验收项、OIDC 租户 claim/allowlist 与跨租户隔离、受控交付物存储单元/SQLite 回归、目标 S3 验收工具、独立 Worker 双进程验收、心跳续租与租约丢失补偿回归、GitHub Actions 0009 Compose/PostgreSQL 双 Worker 共享交付物验收，以及 LibreOffice/Noto CJK DOCX 跨渲染器验收基线已完成。生产验收剩余门槛包括具体身份提供方真实登录和 tenant claim/存量项目映射联调、知识授权与顾问签字、集中日志、真实外部模型容量、真实长文档滚动中断恢复、企业 S3/文档库实跑及非当前版本清理/备份恢复、目标环境 DOCX 复跑和部署联调。这些项目未验证前不得宣称生产验收完成。

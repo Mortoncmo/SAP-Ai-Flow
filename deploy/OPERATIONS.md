@@ -130,6 +130,18 @@ EXPORT_S3_SECRET_ACCESS_KEY=<injected-secret-or-omit-for-IAM-role>
 
 访问密钥必须成对注入，不能写入镜像、Git 或验收摘要；优先使用目标平台的工作负载身份。API 和 Worker 必须使用完全一致的后端、bucket、prefix 和权限。启动后检查 readiness 中的 `artifact_storage` 与 `artifact_storage_status`，再执行一个 Markdown 和一个 Word 导出，并确认 PostgreSQL 的 `export_job.content` 为空、`artifact_backend` 与配置一致、下载内容 SHA-256 校验通过。
 
+在仓库根目录使用与目标 API/Worker 相同的环境变量和工作负载身份执行真实 S3 门禁：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\verify_s3_storage.py `
+  --allow-write `
+  --output .\output\s3-acceptance\report.json
+```
+
+脚本只有显式提供 `--allow-write` 才会运行，并会写入/读取/检查/删除一个唯一探针。通过条件包括内容长度与 SHA-256 一致、`ServerSideEncryption=AES256`、bucket 版本化为 `Enabled`、至少一条启用的生命周期规则覆盖配置 prefix，以及删除后当前对象不可读。报告只保存 bucket/prefix 的 SHA-256 短指纹，不记录目标名称、访问密钥或 endpoint。
+
+版本化 bucket 的 `DeleteObject` 会创建删除标记，脚本确认的是当前对象不可读，不代表旧版本已物理清除。运维验收还必须检查匹配 prefix 的非当前版本保留/过期策略、删除标记处理、对象恢复和备份恢复，并归档策略截图或导出、脱敏报告、执行人和时间。脚本未在真实企业 bucket 执行，或只在 Fake S3/MinIO 临时环境通过时，不能关闭生产存储验收。
+
 ## PostgreSQL 备份
 
 以下命令生成可读 SQL 备份；执行前确认 `.env` 中的数据库用户名和数据库名与 Compose 一致。
@@ -257,4 +269,4 @@ Invoke-WebRequest -UseBasicParsing http://localhost:8080/health/ready
 
 ## 当前验收边界
 
-本机没有 Docker CLI，因此 Compose build/up、真实 PostgreSQL、卷归档和恢复尚未完成本机实跑。GitHub Actions 运行 `31373701595` 已验证 Prometheus 配置和 3 条告警规则、readiness 的 `tenant_isolation=oidc_claim_allowlist`、`artifact_storage_status=ready`、0009 迁移、两个 Worker 共享文件系统交付物、数据库不保存二进制、12 个任务恰好一次、心跳新鲜任务保留、陈旧租约接管、旧 Token 写回拒绝和 PostgreSQL 备份恢复。目标环境仍需按本文档执行真实 IdP tenant claim/存量项目映射、Prometheus/Alertmanager 与集中日志平台联调、导出卷/S3 归档恢复、真实长文档滚动中断和容量演练，并归档命令输出、SHA256、readiness 与导出验收结果。
+本机没有 Docker CLI，因此 Compose build/up、真实 PostgreSQL、卷归档和恢复尚未完成本机实跑。GitHub Actions 运行 `31374798367` 已通过 API、Web、DOCX 和 deploy 四个作业；此前运行 `31373701595` 已验证 Prometheus 配置和 3 条告警规则、readiness 的 `tenant_isolation=oidc_claim_allowlist`、`artifact_storage_status=ready`、0009 迁移、两个 Worker 共享文件系统交付物、数据库不保存二进制、12 个任务恰好一次、心跳新鲜任务保留、陈旧租约接管、旧 Token 写回拒绝和 PostgreSQL 备份恢复。目标环境仍需按本文档执行真实 IdP tenant claim/存量项目映射、Prometheus/Alertmanager 与集中日志平台联调、真实 S3 写入与非当前版本/恢复验收、导出卷归档恢复、真实长文档滚动中断和容量演练，并归档命令输出、SHA256、readiness 与导出验收结果。

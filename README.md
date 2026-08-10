@@ -118,6 +118,8 @@ Markdown/Word 下载默认先创建持久化导出任务，再每 250 毫秒查�
 
 开发环境默认 `EXPORT_EXECUTION_MODE=inline` 和 `EXPORT_STORAGE_BACKEND=database`，便于用 SQLite 单进程运行；生产 Compose 固定使用独立 Worker 和 `EXPORT_STORAGE_BACKEND=filesystem`，API 只创建和查询任务，导出二进制写入与数据库分离的 `export-data` 受控卷。也可以将生产后端切换为 `s3`，通过 S3 兼容对象存储保存对象并使用 AES-256 服务端加密；生产配置为 `database` 时 readiness 返回 503。Worker 使用 PostgreSQL 原子领取、心跳续租、租约 Token 栅栏和尝试次数，既避免正常长文档被误接管，也防止陈旧实例覆盖接管后的结果。CI 已用两个健康 Worker 验证 12 个普通任务恰好执行一次、对象不写入数据库、陈旧任务只接管一次、心跳新鲜任务不被接管且旧 Token 写回被拒绝。文件默认保留 24 小时并按 SHA-256 校验，正式蓝图仍需按运维策略进入受控文档库或对象存储生命周期，详见 [deploy/OPERATIONS.md](deploy/OPERATIONS.md)。
 
+目标 S3 配置完成后，从仓库根目录执行 `.\.venv\Scripts\python.exe .\scripts\verify_s3_storage.py --allow-write`。该命令会真实写入并删除一个唯一探针，校验上传/下载、SHA-256、长度、AES256、bucket 版本化、配置 prefix 的生命周期覆盖和删除后不可读，并默认把脱敏报告写入 `output/s3-acceptance/report.json`。`--allow-write` 是强制确认；版本化 bucket 的删除会产生删除标记，非当前探针版本仍需由生命周期与保留策略处理。未在目标企业 bucket 实跑并完成恢复演练前，不能据此宣称生产存储验收完成。
+
 未配置时保持 `AGENT_PROVIDER=local`。本地规则引擎支持以下演示指令：
 
 - `在信用检查后增加经理审批`
