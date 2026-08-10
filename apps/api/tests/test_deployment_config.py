@@ -252,7 +252,7 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "output/oidc-acceptance.json" in workflow
     assert "authorization_code_pkce" in workflow
     assert "[REDACTED]" in workflow
-    assert "run-code --filename scripts/oidc_browser_acceptance.js" in workflow
+    assert "--json run-code --filename scripts/oidc_browser_acceptance.js" in workflow
     assert "--raw run-code" not in workflow
     assert "OIDC_BROWSER_RESULT" not in workflow
     assert "output/oidc-browser-cli.log" in workflow
