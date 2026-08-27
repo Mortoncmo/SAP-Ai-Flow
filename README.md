@@ -323,7 +323,24 @@ apps/web/       React 流程图工作台
 apps/api/       FastAPI、Provider、Patch 引擎和测试
 deploy/         Docker Compose 与 Nginx 配置
 .github/        持续集成工作流
+skills/drawio-skill/  可编辑 Draw.io 流程图技能与导出/校验工具
 IMPLEMENTATION.md
+```
+
+## Draw.io 技能
+
+仓库内置 `skills/drawio-skill`，用于创建、修订和导出可编辑的 Draw.io 流程图。技能包含泳道与连线布局规范、用户手工修改保护、PNG/PDF 导出、嵌入源数据修复、结构校验，以及 Word/PPT 同步参考。
+
+从仓库安装到 Codex 技能目录（PowerShell）：
+
+```powershell
+Copy-Item -Recurse -Force .\skills\drawio-skill "$env:CODEX_HOME\skills\drawio-skill"
+```
+
+如果未设置 `CODEX_HOME`，请将目标目录替换为本机 Codex 的技能目录。安装后可运行：
+
+```powershell
+python .\skills\drawio-skill\scripts\validate.py .\设备租赁采购流程方案\设备租赁采购流程.drawio
 ```
 
 ## API 示例
