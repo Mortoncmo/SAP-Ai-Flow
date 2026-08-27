@@ -1,6 +1,38 @@
+import os
+
 import pytest
 
 from app.models.graph import Edge, GraphDocument, Node, NodeType, Position
+
+
+@pytest.fixture(scope="session", autouse=True)
+def isolated_test_runtime(tmp_path_factory):
+    runtime_root = tmp_path_factory.mktemp("sap-ai-flow-runtime")
+    overrides = {
+        "DATABASE_URL": f"sqlite:///{(runtime_root / 'app.db').as_posix()}",
+        "KNOWLEDGE_INDEX_PATH": str(runtime_root / "chroma"),
+    }
+    previous = {name: os.environ.get(name) for name in overrides}
+    os.environ.update(overrides)
+
+    from app.core.config import get_settings
+    from app.db.database import get_database
+    from app.knowledge.service import get_knowledge_service
+
+    get_settings.cache_clear()
+    get_database.cache_clear()
+    get_knowledge_service.cache_clear()
+    try:
+        yield
+    finally:
+        get_knowledge_service.cache_clear()
+        get_database.cache_clear()
+        get_settings.cache_clear()
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 @pytest.fixture

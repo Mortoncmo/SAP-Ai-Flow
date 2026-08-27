@@ -1,36 +1,220 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sap_blueprint}
+      POSTGRES_USER: ${POSTGRES_USER:-sap_blueprint}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   api:
+    image: sap-ai-flow-api:${SAP_FLOW_IMAGE_TAG:-local}
     build:
       context: ..
       dockerfile: apps/api/Dockerfile
     environment:
       APP_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       AGENT_PROVIDER: ${AGENT_PROVIDER:-local}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
-      CORS_ORIGINS: http://localhost:8080
-    ports:
-      - "8000:8000"
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-10}
+      LLM_TOTAL_TIMEOUT_SECONDS: ${LLM_TOTAL_TIMEOUT_SECONDS:-35}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
+      LLM_RETRY_BACKOFF_SECONDS: ${LLM_RETRY_BACKOFF_SECONDS:-0.25}
+      LLM_CACHE_TTL_SECONDS: ${LLM_CACHE_TTL_SECONDS:-60}
+      LLM_CACHE_MAX_ENTRIES: ${LLM_CACHE_MAX_ENTRIES:-128}
+      EXPORT_RETENTION_HOURS: ${EXPORT_RETENTION_HOURS:-24}
+      EXPORT_STALE_MINUTES: ${EXPORT_STALE_MINUTES:-5}
+      EXPORT_LEASE_HEARTBEAT_SECONDS: ${EXPORT_LEASE_HEARTBEAT_SECONDS:-30}
+      EXPORT_STORAGE_BACKEND: ${EXPORT_STORAGE_BACKEND:-filesystem}
+      EXPORT_STORAGE_PATH: /app/data/exports
+      EXPORT_S3_BUCKET: ${EXPORT_S3_BUCKET:-}
+      EXPORT_S3_PREFIX: ${EXPORT_S3_PREFIX:-sap-blueprint-exports}
+      EXPORT_S3_REGION: ${EXPORT_S3_REGION:-}
+      EXPORT_S3_ENDPOINT_URL: ${EXPORT_S3_ENDPOINT_URL:-}
+      EXPORT_S3_ACCESS_KEY_ID: ${EXPORT_S3_ACCESS_KEY_ID:-}
+      EXPORT_S3_SECRET_ACCESS_KEY: ${EXPORT_S3_SECRET_ACCESS_KEY:-}
+      EXPORT_EXECUTION_MODE: worker
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-sap_blueprint}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/${POSTGRES_DB:-sap_blueprint}
+      DATABASE_AUTO_CREATE: "false"
+      KNOWLEDGE_ROOT: /app/SAP_Knowledge
+      KNOWLEDGE_INDEX_PATH: /app/data/chroma
+      KNOWLEDGE_COLLECTION_NAME: ${KNOWLEDGE_COLLECTION_NAME:-sap_knowledge_v1}
+      KNOWLEDGE_EMBEDDING_DIMENSIONS: ${KNOWLEDGE_EMBEDDING_DIMENSIONS:-384}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
+      OIDC_JWKS_URL: ${OIDC_JWKS_URL:-}
+      OIDC_ALGORITHMS: ${OIDC_ALGORITHMS:-RS256}
+      OIDC_USER_ID_CLAIM: ${OIDC_USER_ID_CLAIM:-sub}
+      OIDC_TENANT_ID_CLAIM: ${OIDC_TENANT_ID_CLAIM:-tid}
+      OIDC_ALLOWED_TENANT_IDS: ${OIDC_ALLOWED_TENANT_IDS:-}
+      OIDC_CLOCK_SKEW_SECONDS: ${OIDC_CLOCK_SKEW_SECONDS:-30}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - "8000"
+    volumes:
+      - chroma-data:/app/data/chroma
+      - export-data:/app/data/exports
     healthcheck:
       test:
         - CMD
         - python
         - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live')"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready')"
       interval: 10s
       timeout: 3s
       retries: 5
       start_period: 5s
     restart: unless-stopped
 
-  web:
-    build:
-      context: ..
-      dockerfile: apps/web/Dockerfile
+  worker:
+    image: sap-ai-flow-api:${SAP_FLOW_IMAGE_TAG:-local}
+    command: ["python", "-m", "app.workers.export_worker"]
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      EXPORT_RETENTION_HOURS: ${EXPORT_RETENTION_HOURS:-24}
+      EXPORT_STALE_MINUTES: ${EXPORT_STALE_MINUTES:-5}
+      EXPORT_LEASE_HEARTBEAT_SECONDS: ${EXPORT_LEASE_HEARTBEAT_SECONDS:-30}
+      EXPORT_STORAGE_BACKEND: ${EXPORT_STORAGE_BACKEND:-filesystem}
+      EXPORT_STORAGE_PATH: /app/data/exports
+      EXPORT_S3_BUCKET: ${EXPORT_S3_BUCKET:-}
+      EXPORT_S3_PREFIX: ${EXPORT_S3_PREFIX:-sap-blueprint-exports}
+      EXPORT_S3_REGION: ${EXPORT_S3_REGION:-}
+      EXPORT_S3_ENDPOINT_URL: ${EXPORT_S3_ENDPOINT_URL:-}
+      EXPORT_S3_ACCESS_KEY_ID: ${EXPORT_S3_ACCESS_KEY_ID:-}
+      EXPORT_S3_SECRET_ACCESS_KEY: ${EXPORT_S3_SECRET_ACCESS_KEY:-}
+      EXPORT_EXECUTION_MODE: worker
+      EXPORT_WORKER_POLL_SECONDS: ${EXPORT_WORKER_POLL_SECONDS:-1}
+      EXPORT_WORKER_BATCH_SIZE: ${EXPORT_WORKER_BATCH_SIZE:-8}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-sap_blueprint}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/${POSTGRES_DB:-sap_blueprint}
+      DATABASE_AUTO_CREATE: "false"
     depends_on:
       api:
         condition: service_healthy
+    volumes:
+      - export-data:/app/data/exports
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.workers.export_worker", "--healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+    restart: unless-stopped
+
+  web:
+    image: sap-ai-flow-web:${SAP_FLOW_IMAGE_TAG:-local}
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_API_TIMEOUT_MS: ${VITE_API_TIMEOUT_MS:-40000}
+        VITE_EXPORT_TIMEOUT_MS: ${VITE_EXPORT_TIMEOUT_MS:-44000}
+        VITE_OIDC_AUTHORITY: ${VITE_OIDC_AUTHORITY:-}
+        VITE_OIDC_CLIENT_ID: ${VITE_OIDC_CLIENT_ID:-}
+        VITE_OIDC_REDIRECT_URI: ${VITE_OIDC_REDIRECT_URI:-}
+        VITE_OIDC_POST_LOGOUT_REDIRECT_URI: ${VITE_OIDC_POST_LOGOUT_REDIRECT_URI:-}
+        VITE_OIDC_SCOPE: ${VITE_OIDC_SCOPE:-openid profile email}
+        VITE_OIDC_AUDIENCE: ${VITE_OIDC_AUDIENCE:-}
+    depends_on:
+      api:
+        condition: service_healthy
+      worker:
+        condition: service_healthy
     ports:
       - "8080:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/health/ready || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
     restart: unless-stopped
+
+  oidc-mock:
+    image: ghcr.io/navikt/mock-oauth2-server:6.0.0
+    profiles: ["oidc-acceptance"]
+    environment:
+      JSON_CONFIG: >-
+        {"interactiveLogin":true,"tokenCallbacks":[{"issuerId":"ci","requestMappings":[{"requestParam":"subject","match":"ci-consultant","claims":{"sub":"ci-consultant","name":"CI SAP Consultant","preferred_username":"ci-consultant","tid":"ci-tenant","aud":["sap-ai-flow-ci"]}}]}]}
+    ports:
+      - "127.0.0.1:${OIDC_MOCK_PORT:-9080}:8080"
+    restart: "no"
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: ["monitoring"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      api:
+        condition: service_healthy
+      alertmanager:
+        condition: service_started
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    profiles: ["monitoring"]
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
+    depends_on:
+      alert-drill-receiver:
+        condition: service_healthy
+    restart: unless-stopped
+
+  alert-drill-receiver:
+    image: sap-ai-flow-api:${SAP_FLOW_IMAGE_TAG:-local}
+    profiles: ["monitoring"]
+    command: ["python", "-m", "app.monitoring.alert_drill_receiver"]
+    environment:
+      ALERT_DRILL_PORT: "8080"
+    expose:
+      - "8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 2s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  chroma-data:
+  export-data:
+  prometheus-data:
+  alertmanager-data:

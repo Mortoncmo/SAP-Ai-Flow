@@ -1,0 +1,40 @@
+groups:
+  - name: sap-ai-flow-api
+    rules:
+      - alert: SapAiFlowApiUnavailable
+        expr: up{job="sap-ai-flow-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: SAP AI Flow API is unavailable
+          description: Prometheus has been unable to scrape the internal API target for 2 minutes.
+
+      - alert: SapAiFlowApiHighServerErrorRate
+        expr: |
+          (
+            sum(rate(sap_ai_flow_http_requests_total{job="sap-ai-flow-api",route=~"/api/.*",status_code=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(sap_ai_flow_http_requests_total{job="sap-ai-flow-api",route=~"/api/.*"}[5m])), 0.001)
+          ) > 0.01
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: SAP AI Flow API server error rate exceeds 1 percent
+          description: The 5xx request ratio has exceeded the acceptance threshold for 10 minutes.
+
+      - alert: SapAiFlowApiHighP95Latency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(sap_ai_flow_http_request_duration_seconds_bucket{job="sap-ai-flow-api",route=~"/api/.*"}[10m])
+            )
+          ) > 8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: SAP AI Flow API P95 latency exceeds 8 seconds
+          description: Request P95 has exceeded the acceptance threshold for 10 minutes.

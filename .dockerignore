@@ -1,0 +1,15 @@
+.git
+.github
+.playwright-cli
+.pytest_cache
+.venv
+node_modules
+output
+apps/web/dist
+**/__pycache__
+**/*.py[cod]
+.env
+.env.*
+!.env.example
+*.docx
+*.md.txt

@@ -1,0 +1,45 @@
+{
+  "project": {
+    "name": "SAP MM P2P 验收演示项目",
+    "customer_name": "演示客户",
+    "sap_context": {
+      "edition": "S/4HANA",
+      "release": "2023",
+      "deployment": "private_cloud",
+      "country": "CN"
+    }
+  },
+  "process": {
+    "name": "MM 直接物料采购流程",
+    "module": "MM",
+    "process_scope": "P2P"
+  },
+  "instructions": [
+    "创建 SAP MM P2P 采购到付款流程",
+    "把采购申请审批到创建采购订单的连线标签改为已批准"
+  ],
+  "expected": {
+    "node_count": 7,
+    "edge_count": 6,
+    "lane_count": 5,
+    "node_labels": [
+      "开始",
+      "创建采购申请",
+      "采购申请审批",
+      "创建采购订单",
+      "货物接收",
+      "发票校验",
+      "结束"
+    ],
+    "lane_labels": [
+      "需求部门",
+      "审批人",
+      "采购部门",
+      "仓库",
+      "财务"
+    ],
+    "approval_source_label": "采购申请审批",
+    "approval_target_label": "创建采购订单",
+    "approval_edge_label": "已批准"
+  }
+}
