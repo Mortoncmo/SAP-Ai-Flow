@@ -55,6 +55,17 @@ class Database:
                         "ON project (tenant_id)"
                     )
                 )
+        if "process_revision" in tables:
+            revision_columns = {
+                column["name"] for column in inspect(self.engine).get_columns("process_revision")
+            }
+            with self.engine.begin() as connection:
+                if "drawio_xml" not in revision_columns:
+                    connection.execute(text("ALTER TABLE process_revision ADD COLUMN drawio_xml TEXT"))
+                if "drawio_sha256" not in revision_columns:
+                    connection.execute(
+                        text("ALTER TABLE process_revision ADD COLUMN drawio_sha256 VARCHAR(64)")
+                    )
         if "export_job" not in tables:
             return
         export_columns = {

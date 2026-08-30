@@ -572,6 +572,80 @@ class BlueprintRepository:
             self._raise_database_write_failed(exc)
         return revision
 
+    def save_drawio_revision(
+        self,
+        *,
+        process: ProcessRecord,
+        base_revision: int,
+        base_sha256: str | None,
+        xml: str,
+        xml_sha256: str,
+        graph: GraphDocument,
+        summary: str,
+        user_id: str,
+    ) -> ProcessRevisionRecord:
+        self.ensure_current_revision(process, base_revision)
+        current = self.require_revision(process.id, base_revision)
+        if current.drawio_sha256 != base_sha256:
+            raise FlowchartError(
+                "DRAWIO_HASH_CONFLICT",
+                "Draw.io 源文件已被其他修订更新。",
+                status_code=409,
+                details={
+                    "expected_sha256": base_sha256,
+                    "current_sha256": current.drawio_sha256,
+                    "current_revision": process.current_revision,
+                },
+            )
+        if graph.version != base_revision + 1:
+            raise FlowchartError(
+                "INVALID_RESULT_REVISION",
+                "Draw.io 保存的图版本必须比基准修订号大 1。",
+                status_code=422,
+                details={"base_revision": base_revision, "graph_version": graph.version},
+            )
+        revision = ProcessRevisionRecord(
+            id=new_id("revision"),
+            process_id=process.id,
+            revision_no=graph.version,
+            lifecycle_state="DRAFT",
+            schema_version=graph.schema_version,
+            graph_json=graph.model_dump(mode="json"),
+            drawio_xml=xml,
+            drawio_sha256=xml_sha256,
+            created_by=user_id,
+        )
+        change = ChangeLogRecord(
+            id=new_id("change"),
+            process_id=process.id,
+            base_revision=base_revision,
+            result_revision=graph.version,
+            user_prompt="Draw.io 编辑器保存",
+            normalized_patch={
+                "kind": "drawio_save",
+                "base_sha256": base_sha256,
+                "result_sha256": xml_sha256,
+            },
+            decision_summary=redact_log_text(summary, max_length=500),
+            evidence_refs=[],
+            provider="human",
+            model="drawio",
+            created_by=user_id,
+        )
+        process.current_revision = graph.version
+        process.status = "DRAFT"
+        process.updated_at = utc_now()
+        self.session.add_all([revision, change])
+        try:
+            self.session.commit()
+        except IntegrityError as exc:
+            self.session.rollback()
+            self.raise_revision_conflict(process, base_revision, cause=exc)
+        except SQLAlchemyError as exc:
+            self.session.rollback()
+            self._raise_database_write_failed(exc)
+        return revision
+
     def publish_release(
         self, *, process: ProcessRecord, revision_no: int, user_id: str
     ) -> ProcessRevisionRecord:

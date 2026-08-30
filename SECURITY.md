@@ -16,14 +16,15 @@ CI runs:
 
 ## Temporary Advisory Exception
 
-### PYSEC-2026-311 / CVE-2026-45829
+### ChromaDB HTTP server advisories
 
-- Recorded: 2026-08-09
+- Advisory IDs: PYSEC-2026-311 / CVE-2026-45829, CVE-2026-45830, CVE-2026-45831, and CVE-2026-45833
+- Recorded: 2026-08-09; expanded for the three newly reported advisories on 2026-08-30
 - Review by: 2026-09-09 or immediately when ChromaDB publishes a fixed release
 - Affected dependency: ChromaDB 1.0.0 through 1.5.9
 - Upstream status at review: 1.5.9 is the latest release and no fixed version is listed
-- Advisory scope: unauthenticated code injection through the Chroma HTTP endpoint `/api/v2/tenants/{tenant}/databases/{db}/collections` when an attacker supplies a model repository with `trust_remote_code=true`
+- Advisory scope: code injection through Chroma HTTP collection endpoints when an attacker supplies a model repository with `trust_remote_code=true`, plus missing tenant and resource checks in Chroma's HTTP authentication and `SimpleRBACAuthorizationProvider` paths
 
-The application does not run a Chroma server, expose a Chroma port, mount Chroma's FastAPI routes, or accept model repository configuration. It uses `PersistentClient` or `EphemeralClient` in the API process and exposes only the application's controlled knowledge search endpoints. `tests/test_logging.py::test_chroma_http_api_is_not_exposed` is the regression gate for this deployment assumption.
+The application does not run a Chroma server, expose a Chroma port, mount Chroma's FastAPI routes, configure Chroma authentication/RBAC providers, or accept model repository configuration. It uses `PersistentClient` or `EphemeralClient` in the API process and exposes only the application's controlled knowledge search endpoints. `tests/test_logging.py::test_chroma_http_api_is_not_exposed` is the regression gate for this deployment assumption.
 
-The dependency audit exception and the Trivy unfixed-finding policy remain valid only while these controls hold. The exception must be removed if a Chroma HTTP server is added, arbitrary embedding functions or model repositories become configurable, or a fixed ChromaDB release becomes available.
+The dependency audit exceptions and the Trivy unfixed-finding policy remain valid only while these controls hold. The applicable exceptions must be removed if a Chroma HTTP server or authorization provider is added, arbitrary embedding functions or model repositories become configurable, or a fixed ChromaDB release becomes available.

@@ -16,6 +16,7 @@ import type {
   ProjectAudit,
   ProjectMember,
   ProjectRole,
+  DrawioRevisionResponse,
 } from '../types'
 import { parseDownloadFilename } from '../export'
 import { clearOidcSession, getAccessToken } from '../auth/oidc'
@@ -236,6 +237,26 @@ export async function modifyPersistedFlow(
   )
 }
 
+export async function previewPersistedFlow(
+  processId: string,
+  baseRevision: number,
+  instruction: string,
+  signal?: AbortSignal,
+): Promise<PersistedModifyResponse> {
+  const requestId = createRequestId()
+  return postJson<PersistedModifyResponse>(
+    `/api/v1/processes/${encodeURIComponent(processId)}/modify/preview`,
+    {
+      request_id: requestId,
+      base_revision: baseRevision,
+      instruction,
+      locale: 'zh-CN',
+    },
+    signal,
+    requestId,
+  )
+}
+
 export async function savePersistedFlow(
   processId: string,
   baseRevision: number,
@@ -251,6 +272,43 @@ export async function savePersistedFlow(
       base_revision: baseRevision,
       graph: { ...graph, version: baseRevision + 1 },
       summary,
+    },
+    signal,
+    requestId,
+  )
+}
+
+export async function getDrawioRevision(
+  processId: string,
+  revisionNo: number,
+  signal?: AbortSignal,
+): Promise<DrawioRevisionResponse> {
+  return getJson<DrawioRevisionResponse>(
+    `/api/v1/processes/${encodeURIComponent(processId)}/revisions/${revisionNo}/drawio`,
+    signal,
+  )
+}
+
+export async function saveDrawioRevision(
+  processId: string,
+  baseRevision: number,
+  baseSha256: string | null,
+  xml: string,
+  xmlSha256: string,
+  graph: GraphDocument,
+  signal?: AbortSignal,
+): Promise<DrawioRevisionResponse> {
+  const requestId = createRequestId()
+  return postJson<DrawioRevisionResponse>(
+    `/api/v1/processes/${encodeURIComponent(processId)}/drawio`,
+    {
+      request_id: requestId,
+      base_revision: baseRevision,
+      base_sha256: baseSha256,
+      xml,
+      xml_sha256: xmlSha256,
+      graph: { ...graph, version: baseRevision + 1 },
+      summary: 'Draw.io 编辑器保存',
     },
     signal,
     requestId,

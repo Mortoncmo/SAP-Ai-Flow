@@ -246,12 +246,12 @@ API 同时在容器内提供 `/internal/metrics` Prometheus 端点，指标只�
 # Python 与 Node.js 生产依赖审计
 Set-Location .\apps\api
 $env:PYTHONUTF8='1'
-..\..\.venv\Scripts\python.exe -m pip_audit -r requirements.txt --ignore-vuln PYSEC-2026-311
+..\..\.venv\Scripts\python.exe -m pip_audit -r requirements.txt --ignore-vuln PYSEC-2026-311 --ignore-vuln CVE-2026-45830 --ignore-vuln CVE-2026-45831 --ignore-vuln CVE-2026-45833
 Set-Location ..\..
 npm.cmd audit --omit=dev --audit-level=high
 ```
 
-`PYSEC-2026-311` 的限定例外、不可达条件和复核日期记录在 [SECURITY.md](SECURITY.md)。如果部署 Chroma HTTP 服务、开放任意模型仓库配置或上游发布修复版，必须立即移除例外。
+ChromaDB 的 `PYSEC-2026-311`、`CVE-2026-45830`、`CVE-2026-45831` 和 `CVE-2026-45833` 限定例外、不可达条件及复核日期记录在 [SECURITY.md](SECURITY.md)。如果部署 Chroma HTTP 服务、启用 Chroma RBAC、开放任意模型仓库配置或上游发布修复版，必须立即移除对应例外。
 
 ## 知识索引
 
@@ -323,8 +323,34 @@ apps/web/       React 流程图工作台
 apps/api/       FastAPI、Provider、Patch 引擎和测试
 deploy/         Docker Compose 与 Nginx 配置
 .github/        持续集成工作流
+skills/drawio-skill/  可编辑 Draw.io 流程图技能与导出/校验工具
 IMPLEMENTATION.md
 ```
+
+## Draw.io 技能
+
+仓库内置 `skills/drawio-skill`，用于创建、修订和导出可编辑的 Draw.io 流程图。技能包含泳道与连线布局规范、用户手工修改保护、PNG/PDF 导出、嵌入源数据修复、结构校验，以及 Word/PPT 同步参考。
+
+从仓库安装到 Codex 技能目录（PowerShell）：
+
+```powershell
+Copy-Item -Recurse -Force .\skills\drawio-skill "$env:CODEX_HOME\skills\drawio-skill"
+```
+
+如果未设置 `CODEX_HOME`，请将目标目录替换为本机 Codex 的技能目录。安装后可运行：
+
+```powershell
+python .\skills\drawio-skill\scripts\validate.py .\设备租赁采购流程方案\设备租赁采购流程.drawio
+```
+
+## Draw.io Web 编辑路径
+
+- `/?drawio-poc=1` 打开旁路 POC；选择项目流程后，主界面的 `Draw.io` 入口会携带流程和修订号。
+- Web 使用 `GraphDocument <-> Draw.io XML` 适配层，稳定保留节点、连线、泳道 ID 和 SAP 元数据。
+- Draw.io 保存会同时写入 XML 源、SHA-256 和语义投影；revision 或 hash 过期时返回冲突，不覆盖新修订。
+- AI 修改先调用预览接口返回原 `LLMPatch`，确认后才保存修订。
+- React Flow 当前仍是回退路径。完成目标环境的导入导出、发布、Word/PPT 同步和浏览器验收前不要移除。
+- `设备租赁采购流程方案/generate_deliverables.py` 默认保留现有 `.drawio`；只有显式传入 `--regenerate-drawio` 才允许重建权威源文件。
 
 ## API 示例
 

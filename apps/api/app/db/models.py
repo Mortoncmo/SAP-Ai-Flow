@@ -101,6 +101,8 @@ class ProcessRevisionRecord(Base):
     lifecycle_state: Mapped[str] = mapped_column(String(20), nullable=False, default="DRAFT")
     schema_version: Mapped[str] = mapped_column(String(10), nullable=False)
     graph_json: Mapped[dict[str, object]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    drawio_xml: Mapped[str | None] = mapped_column(Text)
+    drawio_sha256: Mapped[str | None] = mapped_column(String(64))
     created_by: Mapped[str] = mapped_column(String(80), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 

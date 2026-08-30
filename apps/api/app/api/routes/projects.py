@@ -1,4 +1,5 @@
 from functools import lru_cache
+from hashlib import sha256
 from time import perf_counter
 from urllib.parse import quote
 
@@ -38,6 +39,8 @@ from app.models.graph import GapStatus, GraphDocument, SapContext
 from app.models.patch import LLMPatch, NodeChanges, UpdateNodeOperation
 from app.models.projects import (
     DraftCreate,
+    DrawioRevisionResponse,
+    DrawioSaveRequest,
     ExportJobResponse,
     ExportRequest,
     GapDecisionCreate,
@@ -318,6 +321,66 @@ def save_process(
     )
 
 
+@router.get(
+    "/processes/{process_id}/revisions/{revision_no}/drawio",
+    response_model=DrawioRevisionResponse,
+)
+def get_drawio_revision(
+    process_id: str,
+    revision_no: int,
+    repository: BlueprintRepository = Depends(get_repository),
+    user: UserContext = Depends(get_user_context),
+) -> DrawioRevisionResponse:
+    _authorize_process(repository, process_id, user, ProjectRole.VIEWER)
+    revision = repository.require_revision(process_id, revision_no)
+    return DrawioRevisionResponse(
+        process_id=process_id,
+        revision_no=revision.revision_no,
+        xml=revision.drawio_xml,
+        xml_sha256=revision.drawio_sha256,
+        graph=GraphDocument.model_validate(revision.graph_json),
+    )
+
+
+@router.post("/processes/{process_id}/drawio", response_model=DrawioRevisionResponse)
+def save_drawio_revision(
+    process_id: str,
+    request: DrawioSaveRequest,
+    repository: BlueprintRepository = Depends(get_repository),
+    user: UserContext = Depends(get_user_context),
+) -> DrawioRevisionResponse:
+    process = _authorize_process(repository, process_id, user, ProjectRole.EDITOR)
+    encoded_xml = request.xml.encode("utf-8")
+    actual_sha256 = sha256(encoded_xml).hexdigest()
+    if actual_sha256 != request.xml_sha256:
+        raise FlowchartError(
+            "DRAWIO_HASH_MISMATCH",
+            "Draw.io XML 的 SHA-256 与请求不一致。",
+            status_code=422,
+            details={"expected_sha256": request.xml_sha256, "actual_sha256": actual_sha256},
+        )
+    if "<mxfile" not in request.xml or "<mxGraphModel" not in request.xml:
+        raise FlowchartError("INVALID_DRAWIO_XML", "Draw.io XML 结构无效。", status_code=422)
+    current_graph = repository.current_graph(process)
+    graph = GraphDocument.model_validate(request.graph)
+    _validate_gap_edit(current_graph, graph)
+    revision = repository.save_drawio_revision(
+        process=process,
+        base_revision=request.base_revision,
+        base_sha256=request.base_sha256,
+        xml=request.xml,
+        xml_sha256=actual_sha256,
+        graph=graph,
+        summary=request.summary,
+        user_id=user.user_id,
+    )
+    return DrawioRevisionResponse(
+        process_id=process_id,
+        revision_no=revision.revision_no,
+        xml=revision.drawio_xml,
+        xml_sha256=revision.drawio_sha256,
+        graph=graph,
+    )
 @router.post("/processes/{process_id}/modify", response_model=PersistedModifyResponse)
 async def modify_process(
     process_id: str,
@@ -343,11 +406,7 @@ async def modify_process(
         external_model_enabled=project.external_model_enabled,
         model_cache=model_cache,
         cache_namespace=f"{project.id}:{process.id}",
-    ).run(
-        current_graph,
-        request.instruction,
-        request.locale,
-    )
+    ).run(current_graph, request.instruction, request.locale)
     updated = result.graph
     _validate_gap_edit(current_graph, updated)
     repository.save_modified_graph(
@@ -358,14 +417,10 @@ async def modify_process(
         user_prompt=request.instruction,
         provider=result.provider,
         model=result.model,
-        evidence_refs=list(
-            dict.fromkeys(
-                [
-                    *request.evidence_refs,
-                    *[item.evidence_ref for item in result.evidence],
-                ]
-            )
-        ),
+        evidence_refs=list(dict.fromkeys([
+            *request.evidence_refs,
+            *[item.evidence_ref for item in result.evidence],
+        ])),
         user_id=user.user_id,
     )
     return PersistedModifyResponse(
@@ -375,10 +430,7 @@ async def modify_process(
         graph=updated,
         applied_patch=result.patch,
         evidence=result.evidence,
-        warnings=[
-            *graph_warnings(updated),
-            *result.warnings,
-        ],
+        warnings=[*graph_warnings(updated), *result.warnings],
         metrics=ResponseMetrics(
             provider=result.provider,
             model=result.model,
@@ -390,6 +442,48 @@ async def modify_process(
     )
 
 
+@router.post("/processes/{process_id}/modify/preview", response_model=PersistedModifyResponse)
+async def preview_process_modification(
+    process_id: str,
+    request: PersistedModifyRequest,
+    repository: BlueprintRepository = Depends(get_repository),
+    provider: LLMProvider = Depends(get_provider),
+    knowledge_service: KnowledgeService = Depends(get_knowledge_service),
+    model_cache: ModelResultCache = Depends(get_model_result_cache),
+    user: UserContext = Depends(get_user_context),
+) -> PersistedModifyResponse:
+    process = _authorize_process(repository, process_id, user, ProjectRole.EDITOR)
+    project = repository.require_project(
+        process.project_id, user_id=user.user_id, tenant_id=user.tenant_id
+    )
+    repository.ensure_current_revision(process, request.base_revision)
+    current_graph = repository.current_graph(process)
+    started = perf_counter()
+    result = await ProcessAgentOrchestrator(
+        provider,
+        knowledge_service,
+        external_model_enabled=project.external_model_enabled,
+        model_cache=model_cache,
+        cache_namespace=f"{project.id}:{process.id}:preview",
+    ).run(current_graph, request.instruction, request.locale)
+    _validate_gap_edit(current_graph, result.graph)
+    return PersistedModifyResponse(
+        request_id=request.request_id,
+        base_revision=request.base_revision,
+        result_revision=result.graph.version,
+        graph=result.graph,
+        applied_patch=result.patch,
+        evidence=result.evidence,
+        warnings=[*graph_warnings(result.graph), *result.warnings],
+        metrics=ResponseMetrics(
+            provider=result.provider,
+            model=result.model,
+            attempts=result.attempts,
+            model_calls=int(getattr(provider, "external", True)),
+            cache_status="bypassed",
+            latency_ms=int((perf_counter() - started) * 1000),
+        ),
+    )
 @router.get("/processes/{process_id}/revisions", response_model=list[RevisionResponse])
 def list_revisions(
     process_id: str,

@@ -235,6 +235,14 @@ export interface ManualSaveResponse {
   graph: GraphDocument
 }
 
+export interface DrawioRevisionResponse {
+  process_id: string
+  revision_no: number
+  xml: string | null
+  xml_sha256: string | null
+  graph: GraphDocument
+}
+
 export interface RevisionSummary {
   revision_no: number
   release_no: number | null

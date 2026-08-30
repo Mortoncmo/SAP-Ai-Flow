@@ -1581,3 +1581,226 @@ button {
     display: none;
   }
 }
+
+.drawio-poc-shell {
+  display: grid;
+  grid-template-rows: 56px 52px minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-width: 320px;
+  background: #eef1ed;
+}
+
+.drawio-poc-header {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 0 18px;
+  color: #f8faf8;
+  background: #252c28;
+  border-bottom: 1px solid #121714;
+}
+
+.drawio-poc-back,
+.drawio-poc-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #d8e4dc;
+  text-decoration: none;
+}
+
+.drawio-poc-back {
+  width: 32px;
+  height: 32px;
+  border: 1px solid #4a574e;
+  border-radius: 4px;
+}
+
+.drawio-poc-back:hover,
+.drawio-poc-open:hover {
+  color: #ffffff;
+  background: #3b483f;
+}
+
+.drawio-poc-heading {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.drawio-poc-heading strong {
+  font-size: 14px;
+}
+
+.drawio-poc-heading span,
+.drawio-poc-state {
+  color: #aeb8b1;
+  font-size: 11px;
+}
+
+.drawio-poc-dot {
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  background: #d59b48;
+  border-radius: 50%;
+}
+
+.drawio-poc-dot.is-ready {
+  background: #68bd8d;
+}
+
+.drawio-poc-open {
+  min-height: 31px;
+  padding: 0 9px;
+  border: 1px solid #4a574e;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.drawio-poc-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  padding: 0 14px;
+  background: #ffffff;
+  border-bottom: 1px solid #d9ddd7;
+}
+
+.drawio-poc-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.drawio-poc-actions .icon-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: auto;
+  min-width: 0;
+  padding: 0 8px;
+  color: #3c4941;
+  font-size: 11px;
+}
+
+.drawio-poc-actions label.icon-button {
+  cursor: pointer;
+}
+
+.drawio-poc-actions label.icon-button input {
+  display: none;
+}
+
+.drawio-poc-hint {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  overflow: hidden;
+  color: #68716b;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawio-poc-error {
+  overflow: hidden;
+  color: #a13f3f;
+  text-overflow: ellipsis;
+}
+
+.drawio-poc-frame {
+  min-height: 0;
+  padding: 12px;
+}
+
+.drawio-poc-frame iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 360px;
+  background: #ffffff;
+  border: 1px solid #bdc5be;
+  border-radius: 5px;
+  box-shadow: 0 8px 26px rgba(34, 42, 37, 0.09);
+}
+
+.ai-preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #fff8dc;
+  border-top: 1px solid #dccb81;
+}
+
+.ai-preview-bar > div {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 9px;
+  overflow: hidden;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.ai-preview-bar > div span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ai-preview-bar button {
+  min-height: 32px;
+}
+
+.drawio-entry-button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  color: #244d3a;
+  border: 1px solid #9bb6a8;
+  border-radius: 4px;
+  background: #f4faf6;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+@media (max-width: 720px) {
+  .drawio-poc-shell {
+    grid-template-rows: 52px 92px minmax(0, 1fr);
+  }
+
+  .drawio-poc-header {
+    padding: 0 10px;
+  }
+
+  .drawio-poc-heading span,
+  .drawio-poc-state,
+  .drawio-poc-open span {
+    display: none;
+  }
+
+  .drawio-poc-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 7px;
+    padding: 8px 10px;
+  }
+
+  .drawio-poc-hint {
+    width: 100%;
+  }
+
+  .drawio-poc-frame {
+    padding: 8px;
+  }
+}
