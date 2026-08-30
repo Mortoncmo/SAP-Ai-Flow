@@ -174,7 +174,7 @@ jobs:
           test "$(docker compose -f deploy/docker-compose.yml ps --status running --services | grep -c '^worker$')" = "1"
           docker compose -f deploy/docker-compose.yml exec -T api alembic current \
             | tee output/alembic-current.txt
-          grep -q '20260810_0009 (head)' output/alembic-current.txt
+          grep -q '20260830_0010 (head)' output/alembic-current.txt
       - name: Exercise OIDC authorization code and tenant flow
         run: |
           set -euo pipefail
@@ -322,7 +322,7 @@ jobs:
           restored_head="$(docker compose -f deploy/docker-compose.yml exec -T postgres \
             psql --username "$POSTGRES_USER" --dbname sap_blueprint_restore \
               --tuples-only --no-align --command 'SELECT version_num FROM alembic_version;')"
-          test "$restored_head" = "20260810_0009"
+          test "$restored_head" = "20260830_0010"
       - name: Upload deployment acceptance evidence
         if: always()
         uses: actions/upload-artifact@v7
