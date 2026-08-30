@@ -1,5 +1,6 @@
 import json
 import re
+from hashlib import sha256
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
@@ -164,6 +165,114 @@ def _create_process(client: TestClient) -> str:
     assert process_response.status_code == 201, process_response.text
     assert process_response.json()["current_revision"] == 0
     return process_response.json()["id"]
+
+
+def test_drawio_source_save_persists_projection_hash_and_audit(persistence_client):
+    client, database = persistence_client
+    process_id = _create_process(client)
+    current = client.get(f"/api/v1/processes/{process_id}").json()
+    graph = {**current["graph"], "version": 1}
+    xml = (
+        '<mxfile host="SAP AI Flow"><diagram name="直接物料 P2P">'
+        '<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>'
+        '</root></mxGraphModel></diagram></mxfile>'
+    )
+    digest = sha256(xml.encode("utf-8")).hexdigest()
+
+    saved = client.post(
+        f"/api/v1/processes/{process_id}/drawio",
+        json={
+            "request_id": "drawio-save-1",
+            "base_revision": 0,
+            "base_sha256": None,
+            "xml": xml,
+            "xml_sha256": digest,
+            "graph": graph,
+            "summary": "Draw.io 编辑器保存",
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["revision_no"] == 1
+    assert saved.json()["xml_sha256"] == digest
+
+    loaded = client.get(f"/api/v1/processes/{process_id}/revisions/1/drawio")
+    assert loaded.status_code == 200, loaded.text
+    assert loaded.json()["xml"] == xml
+    assert loaded.json()["graph"] == graph
+
+    with database.session_factory() as session:
+        revision = session.scalar(
+            select(ProcessRevisionRecord).where(
+                ProcessRevisionRecord.process_id == process_id,
+                ProcessRevisionRecord.revision_no == 1,
+            )
+        )
+        audit = session.scalar(
+            select(ChangeLogRecord).where(
+                ChangeLogRecord.process_id == process_id,
+                ChangeLogRecord.result_revision == 1,
+            )
+        )
+        assert revision is not None and revision.drawio_sha256 == digest
+        assert audit is not None and audit.normalized_patch["kind"] == "drawio_save"
+
+
+def test_drawio_source_save_rejects_hash_mismatch_and_stale_revision(persistence_client):
+    client, _database = persistence_client
+    process_id = _create_process(client)
+    graph = client.get(f"/api/v1/processes/{process_id}").json()["graph"]
+    graph["version"] = 1
+    xml = '<mxfile><diagram><mxGraphModel><root/></mxGraphModel></diagram></mxfile>'
+    payload = {
+        "request_id": "drawio-save-conflict",
+        "base_revision": 0,
+        "base_sha256": None,
+        "xml": xml,
+        "xml_sha256": "0" * 64,
+        "graph": graph,
+    }
+
+    mismatch = client.post(f"/api/v1/processes/{process_id}/drawio", json=payload)
+    assert mismatch.status_code == 422
+    assert mismatch.json()["error"]["code"] == "DRAWIO_HASH_MISMATCH"
+
+    payload["xml_sha256"] = sha256(xml.encode("utf-8")).hexdigest()
+    first = client.post(f"/api/v1/processes/{process_id}/drawio", json=payload)
+    assert first.status_code == 200, first.text
+    stale = client.post(f"/api/v1/processes/{process_id}/drawio", json=payload)
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "REVISION_CONFLICT"
+
+
+def test_modify_preview_returns_llm_patch_without_persisting_revision(persistence_client):
+    client, database = persistence_client
+    process_id = _create_process(client)
+
+    preview = client.post(
+        f"/api/v1/processes/{process_id}/modify/preview",
+        json={
+            "request_id": "preview-1",
+            "base_revision": 0,
+            "instruction": "在采购申请后增加供应商确认",
+            "locale": "zh-CN",
+        },
+    )
+    assert preview.status_code == 200, preview.text
+    payload = preview.json()
+    assert payload["base_revision"] == 0
+    assert payload["result_revision"] == 1
+    assert payload["applied_patch"]["operations"]
+
+    current = client.get(f"/api/v1/processes/{process_id}")
+    assert current.status_code == 200
+    assert current.json()["current_revision"] == 0
+    with database.session_factory() as session:
+        revision_count = session.scalar(
+            select(func.count()).select_from(ProcessRevisionRecord).where(
+                ProcessRevisionRecord.process_id == process_id
+            )
+        )
+        assert revision_count == 1
 
 
 def test_external_model_policy_requires_admin_opt_in_and_is_audited(persistence_client):

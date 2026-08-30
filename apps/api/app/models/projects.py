@@ -112,6 +112,24 @@ class ManualSaveResponse(StrictModel):
     graph: GraphDocument
 
 
+class DrawioSaveRequest(StrictModel):
+    request_id: str = Field(min_length=1, max_length=80)
+    base_revision: int = Field(ge=0)
+    base_sha256: str | None = Field(default=None, pattern="^[0-9a-f]{64}$")
+    xml: str = Field(min_length=1, max_length=5_000_000)
+    xml_sha256: str = Field(pattern="^[0-9a-f]{64}$")
+    graph: GraphDocument
+    summary: str = Field(default="保存 Draw.io 修订", min_length=1, max_length=500)
+
+
+class DrawioRevisionResponse(StrictModel):
+    process_id: str
+    revision_no: int
+    xml: str | None
+    xml_sha256: str | None
+    graph: GraphDocument
+
+
 class RevisionResponse(StrictModel):
     revision_no: int
     release_no: int | None

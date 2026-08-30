@@ -343,6 +343,15 @@ Copy-Item -Recurse -Force .\skills\drawio-skill "$env:CODEX_HOME\skills\drawio-s
 python .\skills\drawio-skill\scripts\validate.py .\设备租赁采购流程方案\设备租赁采购流程.drawio
 ```
 
+## Draw.io Web 编辑路径
+
+- `/?drawio-poc=1` 打开旁路 POC；选择项目流程后，主界面的 `Draw.io` 入口会携带流程和修订号。
+- Web 使用 `GraphDocument <-> Draw.io XML` 适配层，稳定保留节点、连线、泳道 ID 和 SAP 元数据。
+- Draw.io 保存会同时写入 XML 源、SHA-256 和语义投影；revision 或 hash 过期时返回冲突，不覆盖新修订。
+- AI 修改先调用预览接口返回原 `LLMPatch`，确认后才保存修订。
+- React Flow 当前仍是回退路径。完成目标环境的导入导出、发布、Word/PPT 同步和浏览器验收前不要移除。
+- `设备租赁采购流程方案/generate_deliverables.py` 默认保留现有 `.drawio`；只有显式传入 `--regenerate-drawio` 才允许重建权威源文件。
+
 ## API 示例
 
 主要接口：

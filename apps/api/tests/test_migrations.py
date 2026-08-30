@@ -33,7 +33,11 @@ def test_initial_migration_upgrades_and_downgrades_empty_sqlite(tmp_path, monkey
         )
         export_columns = {column["name"] for column in inspect(engine).get_columns("export_job")}
         project_columns = {column["name"] for column in inspect(engine).get_columns("project")}
+        revision_columns = {
+            column["name"] for column in inspect(engine).get_columns("process_revision")
+        }
         assert "tenant_id" in project_columns
+        assert {"drawio_xml", "drawio_sha256"} <= revision_columns
         assert {
             "claim_token",
             "attempt_count",
@@ -109,6 +113,9 @@ def test_sqlite_development_startup_upgrades_existing_export_jobs(tmp_path, monk
         database = Database(database_url, create_schema=True)
         inspector = inspect(database.engine)
         project_columns = {column["name"] for column in inspector.get_columns("project")}
+        revision_columns = {
+            column["name"] for column in inspector.get_columns("process_revision")
+        }
         project_indexes = {index["name"] for index in inspector.get_indexes("project")}
         columns = {column["name"] for column in inspector.get_columns("export_job")}
         indexes = {index["name"] for index in inspector.get_indexes("export_job")}
@@ -124,6 +131,7 @@ def test_sqlite_development_startup_upgrades_existing_export_jobs(tmp_path, monk
         assert "ix_export_job_status_heartbeat_at" in indexes
         assert "ix_export_job_status_expires_at" in indexes
         assert "tenant_id" in project_columns
+        assert {"drawio_xml", "drawio_sha256"} <= revision_columns
         assert "ix_project_tenant_id" in project_indexes
         database.engine.dispose()
     finally:

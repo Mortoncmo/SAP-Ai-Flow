@@ -19,6 +19,7 @@ import {
   Bot,
   FolderPlus,
   FileCode2,
+  Workflow,
   FileDown,
   FileJson,
   FilePlus2,
@@ -59,6 +60,7 @@ import {
   getRevision,
   modifyFlowchart,
   modifyPersistedFlow,
+  previewPersistedFlow,
   removeProjectMember,
   releaseProcess,
   savePersistedFlow,
@@ -73,6 +75,7 @@ import {
   type AuthSession,
 } from './auth/oidc'
 import { Inspector } from './components/Inspector'
+import { DrawioPoc } from './DrawioPoc'
 import { createEmptyGraph, createId, normalizeGraph } from './data'
 import { buildExportFilename, downloadBlob, downloadUrl } from './export'
 import { BusinessNode, BusinessNodeData, BusinessNodeModel } from './flow/BusinessNode'
@@ -87,6 +90,7 @@ import type {
   ProjectRole,
   ProjectSummary,
   RevisionSummary,
+  PersistedModifyResponse,
 } from './types'
 
 type VisualNode = BusinessNodeModel | LaneNodeModel
@@ -172,6 +176,7 @@ function FlowWorkspace({
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [instruction, setInstruction] = useState('在采购申请后增加供应商确认')
   const [pending, setPending] = useState(false)
+  const [pendingPreview, setPendingPreview] = useState<PersistedModifyResponse | null>(null)
   const [message, setMessage] = useState('本地规则引擎已就绪')
   const [error, setError] = useState('')
   const [inspectorOpen, setInspectorOpen] = useState(true)
@@ -694,10 +699,16 @@ function FlowWorkspace({
     }
     try {
       const response = processId
-        ? await modifyPersistedFlow(processId, baseVersion, command, controller.signal)
+        ? await previewPersistedFlow(processId, baseVersion, command, controller.signal)
         : await modifyFlowchart(graph, command, controller.signal)
       if (useFlowStore.getState().graph.version !== baseVersion) {
         throw new ApiError('画布已发生变化，本次响应未应用。', 'STALE_RESPONSE')
+      }
+      if (processId) {
+        setPendingPreview(response as PersistedModifyResponse)
+        setMessage(`预览：${response.applied_patch.change_summary}`)
+        if (response.warnings.length) setError(response.warnings.join(' '))
+        return
       }
       commitGraph(layoutGraph(normalizeGraph(response.graph)))
       if (processId && 'result_revision' in response) {
@@ -753,6 +764,33 @@ function FlowWorkspace({
     } finally {
       setPending(false)
       abortRef.current = null
+    }
+  }
+
+  const confirmPreview = async () => {
+    if (!pendingPreview || !processId || baseRevision === null || pending) return
+    setPending(true)
+    setError('')
+    setMessage('正在确认并保存 AI 变更')
+    try {
+      const response = await savePersistedFlow(
+        processId,
+        baseRevision,
+        pendingPreview.graph,
+        pendingPreview.applied_patch.change_summary,
+      )
+      commitGraph(layoutGraph(normalizeGraph(response.graph)))
+      setBaseRevision(response.result_revision)
+      setSelectedRevision(String(response.result_revision))
+      setPendingPreview(null)
+      setInstruction('')
+      setMessage('AI 变更已确认并保存')
+      fitCanvas()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'AI 变更保存失败')
+      setMessage('预览仍保留，当前画布未变更')
+    } finally {
+      setPending(false)
     }
   }
 
@@ -1466,12 +1504,36 @@ function FlowWorkspace({
       )}
 
       <footer className="command-dock">
+        {pendingPreview && (
+          <div className="ai-preview-bar" role="region" aria-label="AI 变更预览">
+            <div>
+              <strong>待确认</strong>
+              <span>{pendingPreview.applied_patch.change_summary}</span>
+              <span>{pendingPreview.applied_patch.operations.length} 项操作</span>
+            </div>
+            <button type="button" onClick={() => setPendingPreview(null)} disabled={pending}>取消</button>
+            <button type="button" className="command-button" onClick={() => void confirmPreview()} disabled={pending}>
+              <Save size={16} />
+              <span>确认应用</span>
+            </button>
+          </div>
+        )}
         <div className="command-dock__status" role="status">
           <span>{message}</span>
           {(error || authError) && (
             <span className="command-dock__error">{error || authError}</span>
           )}
         </div>
+        {processId && baseRevision !== null && (
+          <a
+            className="drawio-entry-button"
+            href={`/?drawio-poc=1&processId=${encodeURIComponent(processId)}&revision=${baseRevision}`}
+            title="使用 Draw.io 编辑当前流程"
+          >
+            <Workflow size={17} />
+            <span>Draw.io</span>
+          </a>
+        )}
         <form onSubmit={handleSubmit}>
           <Bot size={20} aria-hidden="true" />
           <textarea
@@ -1515,6 +1577,10 @@ function FlowWorkspace({
 }
 
 export default function App() {
+  if (new URLSearchParams(window.location.search).has('drawio-poc')) {
+    return <DrawioPoc />
+  }
+
   const [authSession, setAuthSession] = useState<AuthSession | null>(null)
   const [authError, setAuthError] = useState('')
   const [authActionPending, setAuthActionPending] = useState(false)
