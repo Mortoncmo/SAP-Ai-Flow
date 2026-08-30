@@ -270,6 +270,15 @@ def test_ci_exercises_compose_postgres_backup_and_restore():
     assert "EXPORT_LEASE_HEARTBEAT_SECONDS: 5" in workflow
     assert "20260830_0010 (head)" in workflow
     assert 'test "$restored_head" = "20260830_0010"' in workflow
+    security_policy = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    for advisory_id in (
+        "PYSEC-2026-311",
+        "CVE-2026-45830",
+        "CVE-2026-45831",
+        "CVE-2026-45833",
+    ):
+        assert f"--ignore-vuln {advisory_id}" in workflow
+        assert advisory_id in security_policy
     assert workflow.count("aquasecurity/trivy-action@v0.36.0") == 4
     assert "output/sap-ai-flow-api.cdx.json" in workflow
     assert "output/sap-ai-flow-web.cdx.json" in workflow

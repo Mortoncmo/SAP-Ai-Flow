@@ -246,12 +246,12 @@ API 同时在容器内提供 `/internal/metrics` Prometheus 端点，指标只�
 # Python 与 Node.js 生产依赖审计
 Set-Location .\apps\api
 $env:PYTHONUTF8='1'
-..\..\.venv\Scripts\python.exe -m pip_audit -r requirements.txt --ignore-vuln PYSEC-2026-311
+..\..\.venv\Scripts\python.exe -m pip_audit -r requirements.txt --ignore-vuln PYSEC-2026-311 --ignore-vuln CVE-2026-45830 --ignore-vuln CVE-2026-45831 --ignore-vuln CVE-2026-45833
 Set-Location ..\..
 npm.cmd audit --omit=dev --audit-level=high
 ```
 
-`PYSEC-2026-311` 的限定例外、不可达条件和复核日期记录在 [SECURITY.md](SECURITY.md)。如果部署 Chroma HTTP 服务、开放任意模型仓库配置或上游发布修复版，必须立即移除例外。
+ChromaDB 的 `PYSEC-2026-311`、`CVE-2026-45830`、`CVE-2026-45831` 和 `CVE-2026-45833` 限定例外、不可达条件及复核日期记录在 [SECURITY.md](SECURITY.md)。如果部署 Chroma HTTP 服务、启用 Chroma RBAC、开放任意模型仓库配置或上游发布修复版，必须立即移除对应例外。
 
 ## 知识索引
 
